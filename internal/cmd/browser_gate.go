@@ -41,7 +41,7 @@ func runBrowserGate(realBinary string, args []string) error {
 
 	ep, err := prepareLiveChromeAttach(realBinary)
 	if err != nil {
-		fmt.Fprint(os.Stderr, liveChromeAttachError)
+		fmt.Fprint(os.Stderr, liveChromeAttachMessage())
 		if err.Error() != "" {
 			fmt.Fprintf(os.Stderr, "\nDetail: %v\n", err)
 		}
@@ -53,6 +53,12 @@ func runBrowserGate(realBinary string, args []string) error {
 }
 
 func prepareLiveChromeAttach(realBinary string) (*CDPEndpoint, error) {
+	// Codex's default sandbox blocks localhost TCP. Soft-probe always fails and
+	// must not run close --all (that wipes concurrent agents' browser sessions).
+	if os.Getenv("CODEX_SANDBOX_NETWORK_DISABLED") == "1" {
+		return nil, fmt.Errorf("CODEX_SANDBOX_NETWORK_DISABLED=1")
+	}
+
 	ep, err := softProbeLiveChrome()
 	if err != nil {
 		// Port file missing / TCP dead: clear stale daemon once, soft-probe again.

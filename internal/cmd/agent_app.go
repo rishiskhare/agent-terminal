@@ -5,10 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
-const agentAppMarker = "# agent-terminal-app:1"
+const agentAppMarker = "# agent-terminal-app:2"
 
 // configuredShell returns the shell used for mode:shell and post-agent exec.
 func configuredShell() (command string, args []string) {
@@ -49,13 +50,24 @@ func writeAgentApp(name string) error {
 	if err != nil {
 		return nil
 	}
+	return writeAgentAppTo(name, path)
+}
+
+// writeAgentAppTo writes apps/<name> pointing at an explicit binary path.
+func writeAgentAppTo(name, execPath string) error {
+	if execPath == "" {
+		return fmt.Errorf("writeAgentAppTo %q: empty path", name)
+	}
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		return err
+	}
 	shell, args := configuredShell()
-	script := renderAgentAppScript(path, shell, args)
+	script := renderAgentAppScript(execPath, shell, args)
 	target := filepath.Join(appDir, name)
 	return os.WriteFile(target, []byte(script), 0755)
 }
 
-// ensureAgentAppScript rewrites stale exec-only launchers before PTY start.
+// ensureAgentAppScript rewrites stale or mis-pointed launchers before PTY start.
 func ensureAgentAppScript(entrypoint, appID string) error {
 	data, err := os.ReadFile(entrypoint)
 	if err != nil {
@@ -64,20 +76,34 @@ func ensureAgentAppScript(entrypoint, appID string) error {
 		}
 		return err
 	}
-	if agentAppScriptCurrent(string(data)) {
+	script := string(data)
+
+	// Minimal Codex heal: doctor owns retarget on --fix; this covers upgrades
+	// where apps/codex still points at Homebrew instead of the shim.
+	if appID == "codex" && runtime.GOOS != "windows" && codexSandboxNetworkEnabled() {
+		shim := codexShimPath()
+		if _, err := os.Stat(shim); err == nil && extractQuotedCommand(script) != shim {
+			return writeAgentAppTo("codex", shim)
+		}
+	}
+
+	if agentAppScriptCurrent(script) {
 		return nil
 	}
 	agentPath, lookErr := exec.LookPath(appID)
 	if lookErr != nil {
-		if extracted := extractQuotedCommand(string(data)); extracted != "" {
+		if extracted := extractQuotedCommand(script); extracted != "" {
 			agentPath = extracted
 		} else {
 			return fmt.Errorf("heal app %q: %w", appID, lookErr)
 		}
 	}
-	shell, args := configuredShell()
-	script := renderAgentAppScript(agentPath, shell, args)
-	return os.WriteFile(entrypoint, []byte(script), 0755)
+	if appID == "codex" && filepath.Dir(agentPath) == shimDir {
+		if real := loadCodexRealPath(); real != "" {
+			agentPath = real
+		}
+	}
+	return writeAgentAppTo(appID, agentPath)
 }
 
 // extractQuotedCommand pulls the first single-quoted path from an old launcher.

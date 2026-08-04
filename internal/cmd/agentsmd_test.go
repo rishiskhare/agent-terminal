@@ -69,6 +69,10 @@ func TestManagedAgentsMDRouting(t *testing.T) {
 		"cannot attach to your live Chrome",
 		"Auto-launch failed",
 		"Do not open Chrome",
+		"CODEX_SANDBOX_NETWORK_DISABLED",
+		"doctor --fix alone will not help",
+		"codexSandboxNetwork",
+		"close this Codex tab",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("managed AGENTS.md missing routing phrase %q", want)

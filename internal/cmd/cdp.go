@@ -39,6 +39,23 @@ const liveChromeAttachError = `Agent Terminal: cannot attach to your live Chrome
 5. Retry: agent-terminal doctor --fix
 `
 
+const codexSandboxAttachError = `Agent Terminal: Codex's sandbox blocked network access
+(CODEX_SANDBOX_NETWORK_DISABLED=1). Retrying in this session will not work.
+
+1. Set "codexSandboxNetwork": true in ~/.config/agent-terminal/config.json (or delete the key) — doctor --fix alone will not help while it is false
+2. Run: agent-terminal doctor --fix
+3. Close this Codex tab; open a new Codex from the Agent Terminal launcher
+4. Trust the folder if Codex prompts
+`
+
+// liveChromeAttachMessage returns the user-facing attach failure text.
+func liveChromeAttachMessage() string {
+	if os.Getenv("CODEX_SANDBOX_NETWORK_DISABLED") == "1" {
+		return codexSandboxAttachError
+	}
+	return liveChromeAttachError
+}
+
 func cdpEndpointCachePath() string {
 	return filepath.Join(cacheDir, "cdp-endpoint")
 }

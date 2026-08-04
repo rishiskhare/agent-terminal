@@ -210,6 +210,8 @@ func runDoctor(fix bool) (*DoctorStatus, error) {
 		status.Checks = append(status.Checks, checkAgentsMD()...)
 	}
 
+	status.Checks = append(status.Checks, checkCodexSandboxNetwork(foundAgents))
+
 	// Probe after session reset on --fix so a stale daemon does not false-fail attach.
 	chromeCheck := checkChromeRemoteDebugging()
 	status.Checks = append(status.Checks, chromeCheck)
@@ -404,8 +406,14 @@ func applyDoctorDefaults(foundAgents []string, realAgentBrowser string) error {
 		updates["env"] = env
 	}
 
+	if err := applyCodexSandboxDefaults(foundAgents); err != nil {
+		return err
+	}
+
 	for _, name := range foundAgents {
-		if name == "agent-browser" {
+		if name == "agent-browser" || name == "codex" {
+			// agent-browser is PATH-shimmed; codex launcher is owned by applyCodexSandboxDefaults
+			// (shim on unix, plain writeAgentApp on Windows).
 			continue
 		}
 		if err := writeAgentApp(name); err != nil {

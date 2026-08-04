@@ -43,6 +43,14 @@ If you see **Agent Terminal: cannot attach to your live Chrome**, or
 **Auto-launch failed: No running Chrome instance found**, **stop**.
 Do not retry in a loop and do not fall back to Web Search.
 
+If the error mentions **CODEX_SANDBOX_NETWORK_DISABLED**, Codex's sandbox blocked
+localhost. Stop — do not retry in this same session (the grant applies only at launch).
+Tell the user: (1) set `"codexSandboxNetwork": true` in `~/.config/agent-terminal/config.json`
+(or remove the key) — **doctor --fix alone will not help while it is `false`**, (2) run
+`agent-terminal doctor --fix` and confirm it says the Codex shim is installed (not Disabled),
+(3) **close this Codex tab** and open a **new** Codex from the Agent Terminal launcher,
+(4) trust the folder if prompted.
+
 Tell the user (Chrome may already be open):
 
 1. Click **Allow** if an “Allow remote debugging?” dialog is showing
