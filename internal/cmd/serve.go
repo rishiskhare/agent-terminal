@@ -23,8 +23,8 @@ import (
 
 	"github.com/aymanbagabas/go-pty"
 	"github.com/gorilla/websocket"
-	"github.com/pomdtr/tweety/internal/jsonrpc"
-	"github.com/pomdtr/tweety/internal/scrollback"
+	"agent-terminal/internal/jsonrpc"
+	"agent-terminal/internal/scrollback"
 	"github.com/spf13/cobra"
 )
 
@@ -531,7 +531,7 @@ func buildPtyCommand(tty pty.Pty, mode, app string, args []string, cwd string) (
 
 	cmd.Env = os.Environ()
 	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
-	cmd.Env = append(cmd.Env, "TERM_PROGRAM=tweety")
+	cmd.Env = append(cmd.Env, "TERM_PROGRAM=agent-terminal")
 	for key, value := range k.StringMap("env") {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
 	}

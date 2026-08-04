@@ -5,20 +5,20 @@ before:
     - go mod tidy
     - rm -rf completions
     - mkdir completions
-    - sh -c 'go run . completion "bash" >./completions/tweety.bash'
-    - sh -c 'go run . completion "zsh" >./completions/tweety.zsh'
-    - sh -c 'go run . completion "fish" >./completions/tweety.fish'
+    - sh -c 'go run . completion "bash" >./completions/agent-terminal.bash'
+    - sh -c 'go run . completion "zsh" >./completions/agent-terminal.zsh'
+    - sh -c 'go run . completion "fish" >./completions/agent-terminal.fish'
 changelog:
   disable: true
 builds:
-  - binary: tweety
+  - binary: agent-terminal
     env:
       - CGO_ENABLED=0
     goos:
       - linux
       - darwin
 archives:
-  - name_template: "tweety-{{ .Version }}-{{ .Os }}_{{ .Arch }}"
+  - name_template: "agent-terminal-{{ .Version }}-{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
         formats: ["zip"]
@@ -28,7 +28,7 @@ archives:
       - completions/*
       - src: extension/dist/chrome-mv3/*
         dst: extensions/chrome
-      - src: extension/dist/tweety-{{ .Version }}-firefox.zip
+      - src: extension/dist/agent-terminal-{{ .Version }}-firefox.zip
         dst: extensions/firefox.zip
 release:
   prerelease: auto
@@ -37,17 +37,18 @@ checksum:
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 brews:
-  - name: tweety
+  - name: agent-terminal
     homepage: https://github.com/pomdtr/tweety
     repository:
       owner: pomdtr
       name: homebrew-tap
     install: |-
-      bin.install "tweety"
-      (share/"tweety").install "extensions"
-      bash_completion.install "completions/tweety.bash"
-      zsh_completion.install "completions/tweety.zsh"
-      fish_completion.install "completions/tweety.fish"
+      bin.install "agent-terminal"
+      (share/"agent-terminal").install "extensions"
+      bash_completion.install "completions/agent-terminal.bash"
+      zsh_completion.install "completions/agent-terminal.zsh"
+      fish_completion.install "completions/agent-terminal.fish"
     caveats: |
       After installation, run:
-        tweety install
+        agent-terminal install
+      Then load the Chrome extension from share/agent-terminal/extensions/chrome

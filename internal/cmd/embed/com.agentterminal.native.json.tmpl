@@ -1,6 +1,6 @@
 {
-    "name": "com.github.pomdtr.tweety",
-    "description": "An integrated terminal for your browser",
+    "name": "com.agentterminal.native",
+    "description": "An integrated terminal for your agent in your browser",
     "type": "stdio",
     "path": "{{ .Path }}",
     {{- if eq .Browser "chromium" }}
@@ -9,7 +9,7 @@
     ]
     {{- else if eq .Browser "gecko" }}
     "allowed_extensions": [
-        "tweety@pomdtr.me"
+        "agent-terminal@agent-terminal.local"
     ]
     {{- end }}
 }

@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/pomdtr/tweety/internal/cmd"
+	"agent-terminal/internal/cmd"
 )
 
 var (

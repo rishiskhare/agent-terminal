@@ -1,4 +1,4 @@
-module github.com/pomdtr/tweety
+module agent-terminal
 
 go 1.24
 

@@ -2,20 +2,20 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build frontend",
+            "label": "build extension",
             "type": "shell",
             "command": "npm run build",
             "options": {
-                "cwd": "${workspaceFolder}/frontend"
+                "cwd": "${workspaceFolder}/extension"
             },
             "group": {
                 "kind": "build"
             }
         },
         {
-            "label": "install tweety",
+            "label": "install agent-terminal",
             "type": "shell",
-            "command": "go install",
+            "command": "mkdir -p bin && go build -o bin/agent-terminal .",
             "group": {
                 "kind": "build"
             }
@@ -23,8 +23,8 @@
         {
             "label": "build",
             "dependsOn": [
-                "build frontend",
-                "install tweety"
+                "build extension",
+                "install agent-terminal"
             ],
             "dependsOrder": "sequence",
             "group": {
