@@ -54,6 +54,28 @@ func TestHasManagedBlock(t *testing.T) {
 	}
 }
 
+func TestManagedAgentsMDRouting(t *testing.T) {
+	body, err := managedAgentsMDBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"side-panel PTY",
+		"Web Search",
+		"search for …",
+		"cannot attach to your live Chrome",
+		"Do not open Chrome",
+		"falling back",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("managed AGENTS.md missing routing phrase %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(body), "banana") {
+		t.Fatal("managed AGENTS.md must not contain joke food examples")
+	}
+}
+
 func TestUpsertHomeAgentsMD(t *testing.T) {
 	body, err := managedAgentsMDBody()
 	if err != nil {
