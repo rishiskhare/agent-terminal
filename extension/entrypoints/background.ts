@@ -1,9 +1,10 @@
 import { JSONRPCResponse, RequestDestroyTTY } from "~/entrypoints/shared/rpc"
+import {
+  WindowTabState,
+  legacySessionKey,
+  windowStateKey,
+} from "~/entrypoints/shared/windowTabs"
 import { type Browser } from 'wxt/browser';
-
-function sessionKey(windowId: number): string {
-  return `agent-terminal.ttySession.${windowId}`;
-}
 
 export default defineBackground(() => {
   let _nativePort: Browser.runtime.Port | null = null;
@@ -100,20 +101,7 @@ export default defineBackground(() => {
     void destroyWindowSession(windowId);
   });
 
-  async function destroyWindowSession(windowId: number) {
-    const key = sessionKey(windowId);
-    const stored = await browser.storage.session.get<{ [key: string]: string }>(key);
-    const ttyId = stored[key];
-    if (!ttyId) {
-      return;
-    }
-    await browser.storage.session.remove(key);
-
-    const nativePort = await getNativePort();
-    if (!nativePort) {
-      return;
-    }
-
+  async function destroyTTYViaNative(nativePort: Browser.runtime.Port, ttyId: string) {
     const requestId = crypto.randomUUID();
     const msg: RequestDestroyTTY = {
       jsonrpc: "2.0",
@@ -143,6 +131,41 @@ export default defineBackground(() => {
         resolve();
       }, 2000);
     });
+  }
+
+  async function destroyWindowSession(windowId: number) {
+    const wKey = windowStateKey(windowId);
+    const legacyKey = legacySessionKey(windowId);
+    const stored = await browser.storage.session.get([wKey, legacyKey]);
+    const state = stored[wKey] as WindowTabState | undefined;
+    const legacyId = stored[legacyKey] as string | undefined;
+
+    const ids = new Set<string>();
+    if (state?.tabs && Array.isArray(state.tabs)) {
+      for (const id of state.tabs) {
+        if (typeof id === "string" && id) {
+          ids.add(id);
+        }
+      }
+    }
+    if (typeof legacyId === "string" && legacyId) {
+      ids.add(legacyId);
+    }
+
+    await browser.storage.session.remove([wKey, legacyKey]);
+
+    if (ids.size === 0) {
+      return;
+    }
+
+    const nativePort = await getNativePort();
+    if (!nativePort) {
+      return;
+    }
+
+    for (const ttyId of ids) {
+      await destroyTTYViaNative(nativePort, ttyId);
+    }
   }
 
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {

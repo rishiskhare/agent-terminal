@@ -30,6 +30,127 @@ body.at-options {
     padding: 24px;
 }
 
+/* Side-panel tab strip (hidden on terminal.html / popup) */
+.at-tabs {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    height: 28px;
+    min-height: 28px;
+    border-bottom: 1px solid #d0d0d0;
+    background: #f0f0f0;
+    user-select: none;
+
+    @media (prefers-color-scheme: dark) {
+        border-bottom-color: #3a3a3a;
+        background: #252525;
+    }
+}
+
+.at-tabs__list {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.at-tabs__tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 140px;
+    padding: 0 6px 0 10px;
+    border: none;
+    border-right: 1px solid #d0d0d0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    white-space: nowrap;
+
+    @media (prefers-color-scheme: dark) {
+        border-right-color: #3a3a3a;
+    }
+}
+
+.at-tabs__tab:hover {
+    background: rgba(0, 0, 0, 0.06);
+
+    @media (prefers-color-scheme: dark) {
+        background: rgba(255, 255, 255, 0.06);
+    }
+}
+
+.at-tabs__tab--active {
+    background: #ffffff;
+    font-weight: 500;
+
+    @media (prefers-color-scheme: dark) {
+        background: #1d1f21;
+    }
+}
+
+.at-tabs__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.at-tabs__close {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 2px;
+    font-size: 14px;
+    line-height: 1;
+    opacity: 0.55;
+}
+
+.at-tabs__close:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.1);
+
+    @media (prefers-color-scheme: dark) {
+        background: rgba(255, 255, 255, 0.12);
+    }
+}
+
+.at-tabs__add {
+    flex: 0 0 auto;
+    width: 28px;
+    border: none;
+    border-left: 1px solid #d0d0d0;
+    background: transparent;
+    color: inherit;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+
+    @media (prefers-color-scheme: dark) {
+        border-left-color: #3a3a3a;
+    }
+}
+
+.at-tabs__add:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.06);
+
+    @media (prefers-color-scheme: dark) {
+        background: rgba(255, 255, 255, 0.06);
+    }
+}
+
+.at-tabs__add:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
 div#terminal {
     flex: 1 1 auto;
     min-height: 0;

@@ -4,47 +4,40 @@ import { AttachAddon } from "@xterm/addon-attach";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import {
-    RequestAttachTTY,
     RequestCreateTTY,
-    RequestDestroyTTY,
     RequestGetXtermConfig,
     RequestResizeTTY,
-    ResponseAttachTTY,
     ResponseCreateTTY,
     ResponseGetXtermConfig,
 } from "./rpc";
 import { renderSetupScreen } from "./setup";
+import {
+    MAX_TABS,
+    WindowTabState,
+    attachTTY,
+    clearWindowState,
+    createTTY,
+    destroyTTY,
+    ensureWindowAlive,
+    loadWindowState,
+    pruneTab,
+    reclaimLegacySession,
+    resolveWindowId,
+    saveWindowState,
+    shortTabLabel,
+} from "./windowTabs";
 
-/** Flat per-window key — avoids RMW races on a shared map object. */
-function sessionKey(windowId: number): string {
-    return `agent-terminal.ttySession.${windowId}`;
+function isSidePanelPage(): boolean {
+    const path = location.pathname;
+    return path.endsWith("sidepanel.html") || path.includes("/sidepanel");
 }
 
-async function resolveWindowId(): Promise<number> {
-    const win = await browser.windows.getCurrent();
-    if (win.id == null) {
-        throw new Error("Could not resolve Chrome window id");
-    }
-    return win.id;
+function isEphemeralLaunch(): boolean {
+    return new URLSearchParams(location.search).has("app") || !isSidePanelPage();
 }
 
-async function destroyTTY(id: string): Promise<void> {
-    try {
-        await browser.runtime.sendMessage<RequestDestroyTTY>({
-            jsonrpc: "2.0",
-            id: crypto.randomUUID(),
-            method: "tty.destroy",
-            params: { id },
-        });
-    } catch {
-        // Host may already be gone.
-    }
-}
-
-async function createOrAttachTTY(): Promise<{ id: string; url: string }> {
+async function createEphemeralTTY(): Promise<{ id: string; url: string }> {
     const searchParams = new URLSearchParams(window.location.search);
-
-    // App launches always get a fresh session (not bound to the window map).
     if (searchParams.has("app")) {
         const resp = await browser.runtime.sendMessage<RequestCreateTTY, ResponseCreateTTY>({
             jsonrpc: "2.0",
@@ -62,59 +55,66 @@ async function createOrAttachTTY(): Promise<{ id: string; url: string }> {
         }
         return resp.result;
     }
-
-    const windowId = await resolveWindowId();
-    const key = sessionKey(windowId);
-    const stored = await browser.storage.session.get<{ [key: string]: string }>(key);
-    const existingId = stored[key];
-
-    if (existingId) {
-        const attachResp = await browser.runtime.sendMessage<RequestAttachTTY, ResponseAttachTTY>({
-            jsonrpc: "2.0",
-            id: crypto.randomUUID(),
-            method: "tty.attach",
-            params: { id: existingId },
-        });
-
-        if (!("error" in attachResp)) {
-            return attachResp.result;
-        }
-
-        // Stale id (daemon restarted or session destroyed) — fall through to create.
-        await browser.storage.session.remove(key);
-    }
-
-    const createResp = await browser.runtime.sendMessage<RequestCreateTTY, ResponseCreateTTY>({
-        jsonrpc: "2.0",
-        id: crypto.randomUUID(),
-        method: "tty.create",
-        params: undefined,
-    });
-
-    if ("error" in createResp) {
-        throw new Error(createResp.error.message);
-    }
-
-    // Window may have closed between create and persist — don't orphan the PTY.
-    try {
-        await browser.windows.get(windowId);
-    } catch {
-        await destroyTTY(createResp.result.id);
-        throw new Error("Chrome window closed before the terminal could attach");
-    }
-
-    await browser.storage.session.set({ [key]: createResp.result.id });
-    return createResp.result;
-}
-
-function isNativeHostError(message: string): boolean {
-    return /native host is not connected/i.test(message);
+    return createTTY();
 }
 
 function showSetup(message: string) {
     document.body.className = "at-setup-host";
     document.body.innerHTML = "";
     document.body.appendChild(renderSetupScreen(message));
+}
+
+function renderTabStrip(
+    strip: HTMLElement,
+    state: WindowTabState,
+    titles: Map<string, string>,
+    handlers: {
+        onSelect: (id: string) => void;
+        onClose: (id: string) => void;
+        onNew: () => void;
+    },
+) {
+    strip.hidden = false;
+    strip.replaceChildren();
+
+    const list = document.createElement("div");
+    list.className = "at-tabs__list";
+
+    for (const id of state.tabs) {
+        const tab = document.createElement("button");
+        tab.type = "button";
+        tab.className = "at-tabs__tab" + (id === state.activeId ? " at-tabs__tab--active" : "");
+        tab.title = titles.get(id) || id;
+
+        const label = document.createElement("span");
+        label.className = "at-tabs__label";
+        label.textContent = shortTabLabel(id, titles.get(id));
+        tab.appendChild(label);
+
+        const close = document.createElement("span");
+        close.className = "at-tabs__close";
+        close.textContent = "×";
+        close.title = "Close terminal";
+        close.addEventListener("click", (e) => {
+            e.stopPropagation();
+            handlers.onClose(id);
+        });
+        tab.appendChild(close);
+
+        tab.addEventListener("click", () => handlers.onSelect(id));
+        list.appendChild(tab);
+    }
+
+    strip.appendChild(list);
+
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "at-tabs__add";
+    add.textContent = "+";
+    add.title = "New terminal";
+    add.disabled = state.tabs.length >= MAX_TABS;
+    add.addEventListener("click", () => handlers.onNew());
+    strip.appendChild(add);
 }
 
 async function main() {
@@ -129,8 +129,8 @@ async function main() {
         id: crypto.randomUUID(),
         method: "xterm.getConfig",
         params: {
-            variant: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-        }
+            variant: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+        },
     });
 
     if ("error" in xtermResp) {
@@ -138,38 +138,67 @@ async function main() {
         return;
     }
 
-    let tty: { id: string; url: string };
-    try {
-        tty = await createOrAttachTTY();
-    } catch (err) {
-        const message = (err as Error).message;
-        console.error("Error creating/attaching TTY:", err);
-        showSetup(message);
+    // Ephemeral: terminal.html / popup / ?app= — no strip, no window state.
+    if (isEphemeralLaunch()) {
+        let tty: { id: string; url: string };
+        try {
+            tty = await createEphemeralTTY();
+        } catch (err) {
+            showSetup((err as Error).message);
+            return;
+        }
+        await runSingleTerminal(anchor, xtermResp.result, tty);
         return;
     }
 
-    const terminal = new Terminal(xtermResp.result);
+    const strip = document.getElementById("tab-strip");
+    if (!strip) {
+        showSetup("Tab strip missing from side panel");
+        return;
+    }
 
+    let windowId: number;
+    try {
+        windowId = await resolveWindowId();
+    } catch (err) {
+        showSetup((err as Error).message);
+        return;
+    }
+
+    await reclaimLegacySession(windowId);
+
+    let state = await loadWindowState(windowId);
+    if (!state || state.tabs.length === 0) {
+        const created = await createTTY();
+        await ensureWindowAlive(windowId, created.id);
+        state = { tabs: [created.id], activeId: created.id };
+        await saveWindowState(windowId, state);
+    }
+
+    const titles = new Map<string, string>();
+    let switchGen = 0;
+    let activeTtyId = state.activeId;
+    let ws: WebSocket | null = null;
+    let attachAddon: AttachAddon | null = null;
+
+    const terminal = new Terminal(xtermResp.result);
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(new WebLinksAddon());
-
     terminal.open(anchor);
+
     terminal.onResize(async (size) => {
+        if (!activeTtyId) {
+            return;
+        }
         const { cols, rows } = size;
         await browser.runtime.sendMessage<RequestResizeTTY>({
             jsonrpc: "2.0",
             method: "tty.resize",
-            params: {
-                tty: tty.id,
-                cols,
-                rows,
-            },
-        })
+            params: { tty: activeTtyId, cols, rows },
+        });
     });
-    fitAddon.fit();
 
-    // Open/fit → WebGL → then Attach (VS Code order).
     try {
         const webglAddon = new WebglAddon();
         webglAddon.onContextLoss(() => {
@@ -180,23 +209,246 @@ async function main() {
         // Canvas renderer remains the default.
     }
 
-    const ws = new WebSocket(tty.url);
-    const attachAddon = new AttachAddon(ws);
-    terminal.loadAddon(attachAddon);
+    const refreshStrip = () => {
+        renderTabStrip(strip, state!, titles, {
+            onSelect: (id) => void switchTo(id),
+            onClose: (id) => void closeTab(id),
+            onNew: () => void newTab(),
+        });
+    };
 
-    // Detach only — do not destroy the daemon session on panel/tab close.
+    const detachSocket = () => {
+        if (attachAddon) {
+            try {
+                attachAddon.dispose();
+            } catch {
+                // already disposed
+            }
+            attachAddon = null;
+        }
+        if (ws) {
+            ws.onmessage = null;
+            ws.onerror = null;
+            ws.onclose = null;
+            try {
+                ws.close();
+            } catch {
+                // ignore
+            }
+            ws = null;
+        }
+    };
+
+    const clearTerminalBuffer = () => {
+        // reset() clears the buffer + scrollback on current xterm; required before attach replay.
+        terminal.reset();
+    };
+
+    async function attachActive(gen: number): Promise<boolean> {
+        if (gen !== switchGen || !state) {
+            return false;
+        }
+
+        let endpoint = await attachTTY(state.activeId);
+        if (!endpoint) {
+            const pruned = pruneTab(state, state.activeId);
+            if (!pruned) {
+                const created = await createTTY();
+                if (gen !== switchGen) {
+                    await destroyTTY(created.id);
+                    return false;
+                }
+                await ensureWindowAlive(windowId, created.id);
+                state = { tabs: [created.id], activeId: created.id };
+            } else {
+                state = pruned;
+            }
+            await saveWindowState(windowId, state);
+            refreshStrip();
+            endpoint = await attachTTY(state.activeId);
+            if (!endpoint) {
+                // Second failure — recreate.
+                const created = await createTTY();
+                if (gen !== switchGen) {
+                    await destroyTTY(created.id);
+                    return false;
+                }
+                await ensureWindowAlive(windowId, created.id);
+                state = { tabs: [created.id], activeId: created.id };
+                await saveWindowState(windowId, state);
+                refreshStrip();
+                endpoint = await attachTTY(state.activeId);
+                if (!endpoint) {
+                    throw new Error("Could not attach to terminal session");
+                }
+            }
+        }
+
+        if (gen !== switchGen) {
+            return false;
+        }
+
+        detachSocket();
+        clearTerminalBuffer();
+
+        activeTtyId = endpoint.id;
+        ws = new WebSocket(endpoint.url);
+        attachAddon = new AttachAddon(ws);
+        terminal.loadAddon(attachAddon);
+
+        fitAddon.fit();
+        const dims = { cols: terminal.cols, rows: terminal.rows };
+        await browser.runtime.sendMessage<RequestResizeTTY>({
+            jsonrpc: "2.0",
+            method: "tty.resize",
+            params: { tty: activeTtyId, cols: dims.cols, rows: dims.rows },
+        });
+
+        if (gen !== switchGen) {
+            return false;
+        }
+        terminal.focus();
+        return true;
+    }
+
+    async function switchTo(id: string) {
+        if (!state || id === state.activeId) {
+            return;
+        }
+        if (!state.tabs.includes(id)) {
+            return;
+        }
+        const gen = ++switchGen;
+        state = { ...state, activeId: id };
+        await saveWindowState(windowId, state);
+        refreshStrip();
+        try {
+            await attachActive(gen);
+        } catch (err) {
+            if (gen === switchGen) {
+                console.error("switch failed:", err);
+                showSetup((err as Error).message);
+            }
+        }
+    }
+
+    async function newTab() {
+        if (!state || state.tabs.length >= MAX_TABS) {
+            return;
+        }
+        const gen = ++switchGen;
+        const created = await createTTY();
+        try {
+            await ensureWindowAlive(windowId, created.id);
+        } catch (err) {
+            showSetup((err as Error).message);
+            return;
+        }
+        if (gen !== switchGen) {
+            await destroyTTY(created.id);
+            return;
+        }
+        state = {
+            tabs: [...state.tabs, created.id],
+            activeId: created.id,
+        };
+        await saveWindowState(windowId, state);
+        refreshStrip();
+        try {
+            await attachActive(gen);
+        } catch (err) {
+            if (gen === switchGen) {
+                showSetup((err as Error).message);
+            }
+        }
+    }
+
+    async function closeTab(id: string) {
+        if (!state) {
+            return;
+        }
+
+        // Inactive: destroy only.
+        if (id !== state.activeId) {
+            await destroyTTY(id);
+            titles.delete(id);
+            const next = pruneTab(state, id);
+            if (!next) {
+                return;
+            }
+            state = next;
+            await saveWindowState(windowId, state);
+            refreshStrip();
+            return;
+        }
+
+        // Active: switch to neighbor first, then destroy.
+        const idx = state.tabs.indexOf(id);
+        const neighbor = state.tabs[idx + 1] ?? state.tabs[idx - 1];
+
+        if (!neighbor) {
+            // Last tab — replace.
+            const gen = ++switchGen;
+            await destroyTTY(id);
+            titles.delete(id);
+            const created = await createTTY();
+            try {
+                await ensureWindowAlive(windowId, created.id);
+            } catch (err) {
+                await clearWindowState(windowId);
+                showSetup((err as Error).message);
+                return;
+            }
+            if (gen !== switchGen) {
+                await destroyTTY(created.id);
+                return;
+            }
+            state = { tabs: [created.id], activeId: created.id };
+            await saveWindowState(windowId, state);
+            refreshStrip();
+            try {
+                await attachActive(gen);
+            } catch (err) {
+                if (gen === switchGen) {
+                    showSetup((err as Error).message);
+                }
+            }
+            return;
+        }
+
+        const gen = ++switchGen;
+        state = { tabs: state.tabs.filter((t) => t !== id), activeId: neighbor };
+        await saveWindowState(windowId, state);
+        refreshStrip();
+        try {
+            const ok = await attachActive(gen);
+            if (ok && gen === switchGen) {
+                await destroyTTY(id);
+                titles.delete(id);
+            }
+        } catch (err) {
+            if (gen === switchGen) {
+                showSetup((err as Error).message);
+            }
+        }
+    }
+
+    terminal.onTitleChange((title) => {
+        if (activeTtyId) {
+            titles.set(activeTtyId, title);
+            document.title = `${title}  |  Agent Terminal`;
+            refreshStrip();
+        }
+    });
+
     globalThis.onbeforeunload = () => {
-        ws.onclose = () => { };
-        ws.close();
+        // Detach only — PTYs survive panel close.
+        detachSocket();
     };
 
     globalThis.onresize = () => {
         fitAddon.fit();
     };
-
-    terminal.onTitleChange((title) => {
-        document.title = `${title}  |  Agent Terminal`
-    });
 
     globalThis.onfocus = () => {
         terminal.focus();
@@ -208,17 +460,86 @@ async function main() {
             jsonrpc: "2.0",
             id: crypto.randomUUID(),
             method: "xterm.getConfig",
-            params: { variant }
+            params: { variant },
         });
         if ("error" in resp) {
-            console.error("Error getting Xterm config:", resp.error);
             return;
         }
-
-        terminal.options.theme = resp.result.theme
+        terminal.options.theme = resp.result.theme;
     });
 
+    refreshStrip();
+    const gen = ++switchGen;
+    try {
+        await attachActive(gen);
+    } catch (err) {
+        showSetup((err as Error).message);
+    }
+}
+
+async function runSingleTerminal(
+    anchor: HTMLElement,
+    xtermConfig: Record<string, unknown>,
+    tty: { id: string; url: string },
+) {
+    let activeTtyId = tty.id;
+    const terminal = new Terminal(xtermConfig);
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.loadAddon(new WebLinksAddon());
+    terminal.open(anchor);
+
+    terminal.onResize(async (size) => {
+        const { cols, rows } = size;
+        await browser.runtime.sendMessage<RequestResizeTTY>({
+            jsonrpc: "2.0",
+            method: "tty.resize",
+            params: { tty: activeTtyId, cols, rows },
+        });
+    });
+    fitAddon.fit();
+
+    try {
+        const webglAddon = new WebglAddon();
+        webglAddon.onContextLoss(() => {
+            webglAddon.dispose();
+        });
+        terminal.loadAddon(webglAddon);
+    } catch {
+        // Canvas fallback.
+    }
+
+    const ws = new WebSocket(tty.url);
+    const attachAddon = new AttachAddon(ws);
+    terminal.loadAddon(attachAddon);
+
+    globalThis.onbeforeunload = () => {
+        ws.onclose = () => { };
+        ws.close();
+    };
+    globalThis.onresize = () => {
+        fitAddon.fit();
+    };
+    terminal.onTitleChange((title) => {
+        document.title = `${title}  |  Agent Terminal`;
+    });
+    globalThis.onfocus = () => {
+        terminal.focus();
+    };
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", async (event) => {
+        const variant = event.matches ? "dark" : "light";
+        const resp = await browser.runtime.sendMessage<RequestGetXtermConfig, ResponseGetXtermConfig>({
+            jsonrpc: "2.0",
+            id: crypto.randomUUID(),
+            method: "xterm.getConfig",
+            params: { variant },
+        });
+        if ("error" in resp) {
+            return;
+        }
+        terminal.options.theme = resp.result.theme;
+    });
     terminal.focus();
 }
 
-main();
+void main();
