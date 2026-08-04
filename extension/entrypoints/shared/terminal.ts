@@ -6,6 +6,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import {
     RequestAttachTTY,
     RequestCreateTTY,
+    RequestDestroyTTY,
     RequestGetXtermConfig,
     RequestResizeTTY,
     ResponseAttachTTY,
@@ -14,12 +15,36 @@ import {
 } from "./rpc";
 import { renderSetupScreen } from "./setup";
 
-const SESSION_STORAGE_KEY = "agent-terminal.ttySessionId";
+/** Flat per-window key — avoids RMW races on a shared map object. */
+function sessionKey(windowId: number): string {
+    return `agent-terminal.ttySession.${windowId}`;
+}
+
+async function resolveWindowId(): Promise<number> {
+    const win = await browser.windows.getCurrent();
+    if (win.id == null) {
+        throw new Error("Could not resolve Chrome window id");
+    }
+    return win.id;
+}
+
+async function destroyTTY(id: string): Promise<void> {
+    try {
+        await browser.runtime.sendMessage<RequestDestroyTTY>({
+            jsonrpc: "2.0",
+            id: crypto.randomUUID(),
+            method: "tty.destroy",
+            params: { id },
+        });
+    } catch {
+        // Host may already be gone.
+    }
+}
 
 async function createOrAttachTTY(): Promise<{ id: string; url: string }> {
     const searchParams = new URLSearchParams(window.location.search);
 
-    // App launches always get a fresh session.
+    // App launches always get a fresh session (not bound to the window map).
     if (searchParams.has("app")) {
         const resp = await browser.runtime.sendMessage<RequestCreateTTY, ResponseCreateTTY>({
             jsonrpc: "2.0",
@@ -38,8 +63,10 @@ async function createOrAttachTTY(): Promise<{ id: string; url: string }> {
         return resp.result;
     }
 
-    const stored = await browser.storage.session.get<{ [SESSION_STORAGE_KEY]?: string }>(SESSION_STORAGE_KEY);
-    const existingId = stored[SESSION_STORAGE_KEY];
+    const windowId = await resolveWindowId();
+    const key = sessionKey(windowId);
+    const stored = await browser.storage.session.get<{ [key: string]: string }>(key);
+    const existingId = stored[key];
 
     if (existingId) {
         const attachResp = await browser.runtime.sendMessage<RequestAttachTTY, ResponseAttachTTY>({
@@ -54,7 +81,7 @@ async function createOrAttachTTY(): Promise<{ id: string; url: string }> {
         }
 
         // Stale id (daemon restarted or session destroyed) — fall through to create.
-        await browser.storage.session.remove(SESSION_STORAGE_KEY);
+        await browser.storage.session.remove(key);
     }
 
     const createResp = await browser.runtime.sendMessage<RequestCreateTTY, ResponseCreateTTY>({
@@ -68,7 +95,15 @@ async function createOrAttachTTY(): Promise<{ id: string; url: string }> {
         throw new Error(createResp.error.message);
     }
 
-    await browser.storage.session.set({ [SESSION_STORAGE_KEY]: createResp.result.id });
+    // Window may have closed between create and persist — don't orphan the PTY.
+    try {
+        await browser.windows.get(windowId);
+    } catch {
+        await destroyTTY(createResp.result.id);
+        throw new Error("Chrome window closed before the terminal could attach");
+    }
+
+    await browser.storage.session.set({ [key]: createResp.result.id });
     return createResp.result;
 }
 

@@ -1,5 +1,9 @@
-import { JSONRPCResponse } from "~/entrypoints/shared/rpc"
+import { JSONRPCResponse, RequestDestroyTTY } from "~/entrypoints/shared/rpc"
 import { type Browser } from 'wxt/browser';
+
+function sessionKey(windowId: number): string {
+  return `agent-terminal.ttySession.${windowId}`;
+}
 
 export default defineBackground(() => {
   let _nativePort: Browser.runtime.Port | null = null;
@@ -90,6 +94,56 @@ export default defineBackground(() => {
 
   // Ensure panel-on-click is set even if the extension was already installed.
   browser.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true });
+
+  // Panel close survives; closing the Chrome window ends that window's terminal.
+  browser.windows.onRemoved.addListener((windowId) => {
+    void destroyWindowSession(windowId);
+  });
+
+  async function destroyWindowSession(windowId: number) {
+    const key = sessionKey(windowId);
+    const stored = await browser.storage.session.get<{ [key: string]: string }>(key);
+    const ttyId = stored[key];
+    if (!ttyId) {
+      return;
+    }
+    await browser.storage.session.remove(key);
+
+    const nativePort = await getNativePort();
+    if (!nativePort) {
+      return;
+    }
+
+    const requestId = crypto.randomUUID();
+    const msg: RequestDestroyTTY = {
+      jsonrpc: "2.0",
+      id: requestId,
+      method: "tty.destroy",
+      params: { id: ttyId },
+    };
+
+    await new Promise<void>((resolve) => {
+      const listener = (res: unknown) => {
+        if (!isJsonRpcResponse(res) || res.id !== requestId) {
+          return;
+        }
+        nativePort.onMessage.removeListener(listener);
+        resolve();
+      };
+      nativePort.onMessage.addListener(listener);
+      try {
+        nativePort.postMessage(msg);
+      } catch {
+        nativePort.onMessage.removeListener(listener);
+        resolve();
+        return;
+      }
+      setTimeout(() => {
+        nativePort.onMessage.removeListener(listener);
+        resolve();
+      }, 2000);
+    });
+  }
 
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (sender.id !== browser.runtime.id) {
