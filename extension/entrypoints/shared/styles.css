@@ -22,7 +22,8 @@ body {
     }
 }
 
-body.at-setup-host {
+body.at-setup-host,
+body.at-options {
     overflow: auto;
     display: block;
     height: auto;
@@ -105,12 +106,7 @@ div#terminal {
 }
 
 /* Options */
-.at-options {
-    display: block;
-    overflow: auto;
-    height: auto;
-    min-height: 100%;
-    padding: 24px;
+body.at-options {
     box-sizing: border-box;
     max-width: 520px;
 }
