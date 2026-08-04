@@ -313,10 +313,26 @@ func NewMessagingHost(logger *slog.Logger, sessions *SessionManager) *jsonrpc.Ho
 		}
 
 		mode, app := params.Mode, params.App
-		if mode == "" && app == "" {
-			if defaultApp := k.String("defaultApp"); defaultApp != "" && appExists(defaultApp) {
-				mode = "app"
-				app = defaultApp
+		switch mode {
+		case "shell":
+			// Explicit shell — never apply defaultApp.
+			mode, app = "", ""
+		case "app":
+			if !isSafeAppID(app) {
+				return nil, fmt.Errorf("invalid app id %q", app)
+			}
+			if !appExists(app) {
+				return nil, fmt.Errorf("unknown app %q", app)
+			}
+		default:
+			// Legacy bare create: optional defaultApp.
+			if mode == "" && app == "" {
+				if defaultApp := k.String("defaultApp"); defaultApp != "" && appExists(defaultApp) {
+					mode = "app"
+					app = defaultApp
+				}
+			} else if app != "" && !isSafeAppID(app) {
+				return nil, fmt.Errorf("invalid app id %q", app)
 			}
 		}
 
@@ -574,8 +590,14 @@ func listAppNames() ([]string, error) {
 	return names, nil
 }
 
+var safeAppIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+func isSafeAppID(app string) bool {
+	return app != "" && safeAppIDRe.MatchString(app)
+}
+
 func appExists(app string) bool {
-	if app == "" {
+	if !isSafeAppID(app) {
 		return false
 	}
 	entrypoint := filepath.Join(appDir, app)

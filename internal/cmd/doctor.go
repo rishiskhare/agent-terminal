@@ -128,6 +128,8 @@ func runDoctor(fix bool) (*DoctorStatus, error) {
 		{"claude", "claude"},
 		{"codex", "codex"},
 		{"cursor-agent", "cursor-agent"},
+		{"hermes", "hermes"},
+		{"openclaw", "openclaw"},
 		{"agent-browser", "agent-browser"},
 	}
 	foundAgents := []string{}

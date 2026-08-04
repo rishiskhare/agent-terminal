@@ -60,12 +60,19 @@ export async function destroyTTY(id: string): Promise<void> {
     }
 }
 
-export async function createTTY(): Promise<{ id: string; url: string }> {
+export type CreateTTYOpts =
+    | { mode: "shell" }
+    | { mode: "app"; app: string };
+
+export async function createTTY(opts: CreateTTYOpts = { mode: "shell" }): Promise<{ id: string; url: string }> {
+    const params = opts.mode === "app"
+        ? { mode: "app" as const, app: opts.app }
+        : { mode: "shell" as const };
     const resp = await browser.runtime.sendMessage<RequestCreateTTY, ResponseCreateTTY>({
         jsonrpc: "2.0",
         id: crypto.randomUUID(),
         method: "tty.create",
-        params: undefined,
+        params,
     });
     if ("error" in resp) {
         throw new Error(resp.error.message);

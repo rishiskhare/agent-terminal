@@ -19,7 +19,7 @@ export type RequestResizeTTY = JSONRPCRequestBase<"tty.resize", {
 }>
 
 export type RequestCreateTTY = JSONRPCRequestBase<"tty.create", {
-    mode?: "app";
+    mode?: "app" | "shell";
     app?: string;
     args?: string[];
     cwd?: string;

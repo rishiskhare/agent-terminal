@@ -12,6 +12,11 @@ import {
 } from "./rpc";
 import { renderSetupScreen } from "./setup";
 import {
+    LauncherController,
+    mountAgentLauncher,
+    optsFromAppId,
+} from "./agentLauncher";
+import {
     MAX_TABS,
     WindowTabState,
     attachTTY,
@@ -55,7 +60,7 @@ async function createEphemeralTTY(): Promise<{ id: string; url: string }> {
         }
         return resp.result;
     }
-    return createTTY();
+    return createTTY({ mode: "shell" });
 }
 
 function showSetup(message: string) {
@@ -64,21 +69,17 @@ function showSetup(message: string) {
     document.body.appendChild(renderSetupScreen(message));
 }
 
-function renderTabStrip(
-    strip: HTMLElement,
+/** Rebuild tab list only — launcher host is a stable sibling. */
+function renderTabList(
+    list: HTMLElement,
     state: WindowTabState,
     titles: Map<string, string>,
     handlers: {
         onSelect: (id: string) => void;
         onClose: (id: string) => void;
-        onNew: () => void;
     },
 ) {
-    strip.hidden = false;
-    strip.replaceChildren();
-
-    const list = document.createElement("div");
-    list.className = "at-tabs__list";
+    list.replaceChildren();
 
     for (const id of state.tabs) {
         const tab = document.createElement("button");
@@ -104,17 +105,6 @@ function renderTabStrip(
         tab.addEventListener("click", () => handlers.onSelect(id));
         list.appendChild(tab);
     }
-
-    strip.appendChild(list);
-
-    const add = document.createElement("button");
-    add.type = "button";
-    add.className = "at-tabs__add";
-    add.textContent = "+";
-    add.title = "New terminal";
-    add.disabled = state.tabs.length >= MAX_TABS;
-    add.addEventListener("click", () => handlers.onNew());
-    strip.appendChild(add);
 }
 
 async function main() {
@@ -167,9 +157,26 @@ async function main() {
 
     await reclaimLegacySession(windowId);
 
+    strip.hidden = false;
+    strip.classList.add("at-tabs");
+    strip.replaceChildren();
+
+    const list = document.createElement("div");
+    list.className = "at-tabs__list";
+    strip.appendChild(list);
+
+    const launcherHost = document.createElement("div");
+    strip.appendChild(launcherHost);
+
+    let launcher!: LauncherController;
+    launcher = mountAgentLauncher(launcherHost, {
+        onLaunch: (appId) => void newTab(appId),
+        canLaunch: () => !!state && state.tabs.length < MAX_TABS,
+    });
+
     let state = await loadWindowState(windowId);
     if (!state || state.tabs.length === 0) {
-        const created = await createTTY();
+        const created = await createWithFallback();
         await ensureWindowAlive(windowId, created.id);
         state = { tabs: [created.id], activeId: created.id };
         await saveWindowState(windowId, state);
@@ -210,12 +217,26 @@ async function main() {
     }
 
     const refreshStrip = () => {
-        renderTabStrip(strip, state!, titles, {
+        renderTabList(list, state!, titles, {
             onSelect: (id) => void switchTo(id),
             onClose: (id) => void closeTab(id),
-            onNew: () => void newTab(),
         });
+        launcher.setLaunchEnabled(state!.tabs.length < MAX_TABS);
     };
+
+    async function createWithFallback(preferred?: string) {
+        try {
+            if (preferred !== undefined) {
+                await launcher.rememberApp(preferred);
+                return await createTTY(optsFromAppId(preferred));
+            }
+            const opts = await launcher.getCreateOpts();
+            return await createTTY(opts);
+        } catch {
+            await launcher.rememberApp("");
+            return await createTTY({ mode: "shell" });
+        }
+    }
 
     const detachSocket = () => {
         if (attachAddon) {
@@ -240,7 +261,6 @@ async function main() {
     };
 
     const clearTerminalBuffer = () => {
-        // reset() clears the buffer + scrollback on current xterm; required before attach replay.
         terminal.reset();
     };
 
@@ -253,7 +273,8 @@ async function main() {
         if (!endpoint) {
             const pruned = pruneTab(state, state.activeId);
             if (!pruned) {
-                const created = await createTTY();
+                // Recreate with shell — no per-tab app metadata.
+                const created = await createTTY({ mode: "shell" });
                 if (gen !== switchGen) {
                     await destroyTTY(created.id);
                     return false;
@@ -267,8 +288,7 @@ async function main() {
             refreshStrip();
             endpoint = await attachTTY(state.activeId);
             if (!endpoint) {
-                // Second failure — recreate.
-                const created = await createTTY();
+                const created = await createTTY({ mode: "shell" });
                 if (gen !== switchGen) {
                     await destroyTTY(created.id);
                     return false;
@@ -332,13 +352,14 @@ async function main() {
         }
     }
 
-    async function newTab() {
+    async function newTab(appId?: string) {
         if (!state || state.tabs.length >= MAX_TABS) {
             return;
         }
         const gen = ++switchGen;
-        const created = await createTTY();
+        let created: { id: string; url: string };
         try {
+            created = await createWithFallback(appId);
             await ensureWindowAlive(windowId, created.id);
         } catch (err) {
             showSetup((err as Error).message);
@@ -368,7 +389,6 @@ async function main() {
             return;
         }
 
-        // Inactive: destroy only.
         if (id !== state.activeId) {
             await destroyTTY(id);
             titles.delete(id);
@@ -382,17 +402,16 @@ async function main() {
             return;
         }
 
-        // Active: switch to neighbor first, then destroy.
         const idx = state.tabs.indexOf(id);
         const neighbor = state.tabs[idx + 1] ?? state.tabs[idx - 1];
 
         if (!neighbor) {
-            // Last tab — replace.
             const gen = ++switchGen;
             await destroyTTY(id);
             titles.delete(id);
-            const created = await createTTY();
+            let created: { id: string; url: string };
             try {
+                created = await createWithFallback();
                 await ensureWindowAlive(windowId, created.id);
             } catch (err) {
                 await clearWindowState(windowId);
@@ -442,7 +461,6 @@ async function main() {
     });
 
     globalThis.onbeforeunload = () => {
-        // Detach only — PTYs survive panel close.
         detachSocket();
     };
 
@@ -451,6 +469,10 @@ async function main() {
     };
 
     globalThis.onfocus = () => {
+        // Don't steal focus from the agent menu.
+        if (document.querySelector(".at-launcher__menu")) {
+            return;
+        }
         terminal.focus();
     };
 
