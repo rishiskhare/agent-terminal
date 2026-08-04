@@ -174,6 +174,18 @@ func runDoctor(fix bool) (*DoctorStatus, error) {
 			})
 		}
 
+		agentsMDChecks, err := materializeAgentsMD()
+		if err != nil {
+			status.Checks = append(status.Checks, DoctorCheck{
+				ID:     "agentsMD",
+				Label:  "AGENTS.md",
+				Status: "warn",
+				Detail: err.Error(),
+			})
+		} else {
+			status.Checks = append(status.Checks, agentsMDChecks...)
+		}
+
 		if realAgentBrowser != "" {
 			if err := resetAgentBrowserSessions(realAgentBrowser); err != nil {
 				status.Checks = append(status.Checks, DoctorCheck{
@@ -192,6 +204,8 @@ func runDoctor(fix bool) (*DoctorStatus, error) {
 				})
 			}
 		}
+	} else {
+		status.Checks = append(status.Checks, checkAgentsMD()...)
 	}
 
 	// Probe after session reset on --fix so a stale daemon does not false-fail attach.
