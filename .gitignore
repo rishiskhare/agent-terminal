@@ -5,12 +5,10 @@
 /public/
 
 /agent-terminal.json
-/tweety.json
 /dist/
 /completions/
 /bin/
 /agent-terminal
-/tweety
 
 # extension
 extension/node_modules/

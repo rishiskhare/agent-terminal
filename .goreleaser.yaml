@@ -38,9 +38,9 @@ snapshot:
   version_template: "{{ incpatch .Version }}-next"
 brews:
   - name: agent-terminal
-    homepage: https://github.com/pomdtr/tweety
+    homepage: https://github.com/agent-terminal/agent-terminal
     repository:
-      owner: pomdtr
+      owner: agent-terminal
       name: homebrew-tap
     install: |-
       bin.install "agent-terminal"
