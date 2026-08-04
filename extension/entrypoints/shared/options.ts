@@ -12,6 +12,8 @@ const statusEl = document.getElementById("status") as HTMLDivElement;
 const configPathEl = document.getElementById("config-path") as HTMLParagraphElement;
 const commandEl = document.getElementById("command") as HTMLInputElement;
 const argsEl = document.getElementById("args") as HTMLInputElement;
+const themeEl = document.getElementById("theme") as HTMLSelectElement;
+const fontSizeEl = document.getElementById("fontSize") as HTMLInputElement;
 const envEl = document.getElementById("env") as HTMLTextAreaElement;
 
 function setStatus(message: string, kind: "ok" | "error" | "" = "") {
@@ -45,11 +47,34 @@ function textToEnv(text: string): Record<string, string> {
     return out;
 }
 
+function fillSelect(select: HTMLSelectElement, values: string[], selected?: string) {
+    select.innerHTML = "";
+    for (const value of values) {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = value;
+        select.appendChild(opt);
+    }
+    if (selected !== undefined && values.includes(selected)) {
+        select.value = selected;
+    } else if (values.length > 0) {
+        select.value = values[0];
+    }
+}
+
 function parseArgs(raw: string): string[] {
     return raw
         .trim()
         .split(/\s+/)
         .filter(Boolean);
+}
+
+function clampFontSize(raw: unknown): number {
+    const n = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isFinite(n)) {
+        return 13;
+    }
+    return Math.min(28, Math.max(10, Math.round(n)));
 }
 
 async function load() {
@@ -66,12 +91,20 @@ async function load() {
         return;
     }
 
-    const { config, path } = resp.result;
+    const { config, themes, path } = resp.result;
     configPathEl.textContent = path;
+
+    const themeList = themes?.length ? themes : ["Tomorrow Night"];
+    fillSelect(themeEl, themeList, String(config.theme ?? "Tomorrow Night"));
 
     commandEl.value = String(config.command ?? "");
     const args = Array.isArray(config.args) ? (config.args as string[]) : [];
     argsEl.value = args.join(" ");
+
+    const xterm = (config.xterm && typeof config.xterm === "object")
+        ? config.xterm as Record<string, unknown>
+        : {};
+    fontSizeEl.value = String(clampFontSize(xterm.fontSize ?? 13));
     envEl.value = envToText(config.env);
     setStatus("Loaded.", "ok");
 }
@@ -83,7 +116,11 @@ async function save(event: Event) {
     const config: Record<string, unknown> = {
         command: commandEl.value.trim() || undefined,
         args: parseArgs(argsEl.value),
+        theme: themeEl.value,
         env: textToEnv(envEl.value),
+        xterm: {
+            fontSize: clampFontSize(fontSizeEl.value),
+        },
     };
 
     const resp = await browser.runtime.sendMessage<RequestConfigSet, ResponseConfigSet>({
