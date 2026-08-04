@@ -21,10 +21,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aymanbagabas/go-pty"
-	"github.com/gorilla/websocket"
 	"agent-terminal/internal/jsonrpc"
 	"agent-terminal/internal/scrollback"
+	"github.com/aymanbagabas/go-pty"
+	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 )
 
@@ -308,8 +308,16 @@ func NewMessagingHost(logger *slog.Logger, sessions *SessionManager) *jsonrpc.Ho
 			}
 		}
 
+		mode, app := params.Mode, params.App
+		if mode == "" && app == "" {
+			if defaultApp := k.String("defaultApp"); defaultApp != "" && appExists(defaultApp) {
+				mode = "app"
+				app = defaultApp
+			}
+		}
+
 		session, err := sessions.Create(func(tty pty.Pty) (*pty.Cmd, error) {
-			return buildPtyCommand(tty, params.Mode, params.App, params.Args, params.Cwd)
+			return buildPtyCommand(tty, mode, app, params.Args, params.Cwd)
 		})
 		if err != nil {
 			return nil, err
@@ -481,7 +489,109 @@ func NewMessagingHost(logger *slog.Logger, sessions *SessionManager) *jsonrpc.Ho
 		return map[string]any{}, nil
 	})
 
+	messagingHost.HandleRequest("config.get", func(input []byte) (any, error) {
+		cfg, err := readConfigMap()
+		if err != nil {
+			return nil, err
+		}
+		themes, _ := listThemeNames()
+		apps, _ := listAppNames()
+		return map[string]any{
+			"config": cfg,
+			"themes": themes,
+			"apps":   apps,
+			"path":   configPath(),
+		}, nil
+	})
+
+	messagingHost.HandleRequest("config.set", func(input []byte) (any, error) {
+		var params struct {
+			Config map[string]any `json:"config"`
+		}
+		if err := json.Unmarshal(input, &params); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal config.set params: %w", err)
+		}
+		if params.Config == nil {
+			return nil, fmt.Errorf("config is required")
+		}
+		if err := writeConfigMap(params.Config); err != nil {
+			return nil, err
+		}
+		cfg, err := readConfigMap()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"config": cfg}, nil
+	})
+
+	messagingHost.HandleRequest("doctor.status", func(input []byte) (any, error) {
+		return runDoctor(false)
+	})
+
+	messagingHost.HandleRequest("doctor.fix", func(input []byte) (any, error) {
+		return runDoctor(true)
+	})
+
 	return messagingHost
+}
+
+func listThemeNames() ([]string, error) {
+	entries, err := themeFs.ReadDir("themes")
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func listAppNames() ([]string, error) {
+	entries, err := os.ReadDir(appDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		names = append(names, strings.TrimSuffix(name, filepath.Ext(name)))
+	}
+	return names, nil
+}
+
+func appExists(app string) bool {
+	if app == "" {
+		return false
+	}
+	entrypoint := filepath.Join(appDir, app)
+	if _, err := os.Stat(entrypoint); err == nil {
+		return true
+	}
+	entries, err := os.ReadDir(appDir)
+	if err != nil {
+		return false
+	}
+	for _, file := range entries {
+		if file.IsDir() {
+			continue
+		}
+		name := file.Name()
+		if strings.TrimSuffix(name, filepath.Ext(name)) == app {
+			return true
+		}
+	}
+	return false
 }
 
 func buildPtyCommand(tty pty.Pty, mode, app string, args []string, cwd string) (*pty.Cmd, error) {
@@ -529,12 +639,10 @@ func buildPtyCommand(tty pty.Pty, mode, app string, args []string, cwd string) (
 		cmd = tty.Command(k.String("command"), k.Strings("args")...)
 	}
 
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
-	cmd.Env = append(cmd.Env, "TERM_PROGRAM=agent-terminal")
-	for key, value := range k.StringMap("env") {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
-	}
+	cmd.Env = mergePtyEnv(os.Environ(), map[string]string{
+		"TERM":         "xterm-256color",
+		"TERM_PROGRAM": "agent-terminal",
+	}, k.StringMap("env"))
 
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -542,7 +650,55 @@ func buildPtyCommand(tty pty.Pty, mode, app string, args []string, cwd string) (
 		cmd.Dir = os.Getenv("HOME")
 	}
 
+	// Best-effort: clear stale agent-browser daemons after Chrome sleep/reopen
+	// before the agent issues its first browser command.
+	go healAgentBrowserBestEffort()
+
 	return cmd, nil
+}
+
+// mergePtyEnv builds the PTY environment. Later maps win; keys replace any
+// prior entry so config PATH (with the agent-browser shim) is not ignored
+// behind a duplicate inherited PATH= (getenv uses the first occurrence).
+func mergePtyEnv(base []string, overlays ...map[string]string) []string {
+	envMap := map[string]string{}
+	order := make([]string, 0, len(base)+8)
+	for _, e := range base {
+		key, val, ok := strings.Cut(e, "=")
+		if !ok {
+			continue
+		}
+		if _, exists := envMap[key]; !exists {
+			order = append(order, key)
+		}
+		envMap[key] = val
+	}
+	for _, overlay := range overlays {
+		for key, val := range overlay {
+			if _, exists := envMap[key]; !exists {
+				order = append(order, key)
+			}
+			envMap[key] = val
+		}
+	}
+	out := make([]string, 0, len(order))
+	for _, key := range order {
+		out = append(out, key+"="+envMap[key])
+	}
+	return out
+}
+
+func healAgentBrowserBestEffort() {
+	real := loadRealAgentBrowserPath()
+	if real == "" {
+		return
+	}
+	if _, err := os.Stat(real); err != nil {
+		return
+	}
+	if err := healStaleAgentBrowserSessions(real); err != nil {
+		log.Printf("agent-browser heal: %v", err)
+	}
 }
 
 func NewWebSocketHandler(sessions *SessionManager) http.Handler {
@@ -659,7 +815,7 @@ func ExtractMetadata(reader io.Reader) (CommandMetadata, error) {
 	var result CommandMetadata
 	scanner := bufio.NewScanner(reader)
 
-	metadataRegex := regexp.MustCompile(`^.*?@tweety\.(\w+)\s+(.*)\s*$`)
+	metadataRegex := regexp.MustCompile(`^.*?@agent-terminal\.(\w+)\s+(.*)\s*$`)
 
 	for scanner.Scan() {
 		line := scanner.Text()

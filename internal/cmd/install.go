@@ -55,6 +55,12 @@ func NewCmdInstall() *cobra.Command {
 				return err
 			}
 			cmd.PrintErrln("Installed native messaging host manifest.")
+
+			if _, err := runDoctor(true); err != nil {
+				cmd.PrintErrf("Doctor: %v\n", err)
+			} else {
+				cmd.PrintErrln("Doctor applied safe defaults. Open the Agent Terminal side panel.")
+			}
 			return nil
 		},
 	}

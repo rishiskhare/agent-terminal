@@ -58,6 +58,8 @@ func NewCmdRoot(version string) *cobra.Command {
 		NewCmdServe(),
 		NewCmdInstall(),
 		NewCmdRun(),
+		NewCmdDoctor(),
+		NewCmdBrowserGate(),
 	)
 
 	return cmd
