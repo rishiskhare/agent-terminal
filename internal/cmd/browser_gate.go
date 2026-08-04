@@ -48,7 +48,7 @@ func runBrowserGate(realBinary string, args []string) error {
 		os.Exit(1)
 	}
 
-	gated := rewriteAgentBrowserArgs(args, ep.WSURL)
+	gated := rewriteAgentBrowserArgs(args, ep.WSURL, os.Getenv("AGENT_BROWSER_SESSION"))
 	return execRealAgentBrowser(realBinary, gated, nil)
 }
 
@@ -114,12 +114,23 @@ func isBrowserGatePassthrough(args []string) bool {
 }
 
 func firstAgentBrowserCommand(args []string) (cmd string, rest []string) {
+	idx := firstAgentBrowserCommandIndex(args)
+	if idx < 0 {
+		return "", nil
+	}
+	return args[idx], args[idx+1:]
+}
+
+func firstAgentBrowserCommandIndex(args []string) int {
 	i := 0
 	for i < len(args) {
 		a := args[i]
 		if a == "--" {
 			i++
-			break
+			if i < len(args) {
+				return i
+			}
+			return -1
 		}
 		if strings.HasPrefix(a, "-") {
 			name, hasEq := strings.CutPrefix(a, "--")
@@ -146,18 +157,17 @@ func firstAgentBrowserCommand(args []string) (cmd string, rest []string) {
 			i++
 			continue
 		}
-		return a, args[i+1:]
+		return i
 	}
-	if i < len(args) {
-		return args[i], args[i+1:]
-	}
-	return "", nil
+	return -1
 }
 
-// rewriteAgentBrowserArgs forces --cdp to the live endpoint, strips conflicting
-// flags, and rewrites open/goto/navigate to tab new so pages open as tabs in the
-// existing Chrome window instead of a separate OS window.
-func rewriteAgentBrowserArgs(args []string, wsURL string) []string {
+// rewriteAgentBrowserArgs forces --cdp to the live endpoint, optionally forces
+// --session from AGENT_BROWSER_SESSION, strips conflicting flags, and rewrites
+// open/goto/navigate to tab new so pages open as tabs in the existing Chrome
+// window instead of a separate OS window.
+func rewriteAgentBrowserArgs(args []string, wsURL, session string) []string {
+	forceSession := strings.TrimSpace(session) != ""
 	stripped := make([]string, 0, len(args))
 	i := 0
 	for i < len(args) {
@@ -172,6 +182,13 @@ func rewriteAgentBrowserArgs(args []string, wsURL string) []string {
 			}
 		case strings.HasPrefix(a, "--cdp="):
 			i++
+		case forceSession && a == "--session":
+			i++
+			if i < len(args) && !strings.HasPrefix(args[i], "-") {
+				i++
+			}
+		case forceSession && strings.HasPrefix(a, "--session="):
+			i++
 		case a == "--":
 			stripped = append(stripped, args[i:]...)
 			i = len(args)
@@ -182,29 +199,35 @@ func rewriteAgentBrowserArgs(args []string, wsURL string) []string {
 	}
 
 	rewritten := rewriteOpenToTabNew(stripped)
-	out := make([]string, 0, len(rewritten)+2)
+	out := make([]string, 0, len(rewritten)+4)
 	out = append(out, "--cdp", wsURL)
+	if forceSession {
+		out = append(out, "--session", strings.TrimSpace(session))
+	}
 	out = append(out, rewritten...)
 	return out
 }
 
-// rewriteOpenToTabNew maps open|goto|navigate to "tab new" so CDP attach opens a
-// tab in the existing window rather than a new OS window.
+// rewriteOpenToTabNew maps open|goto|navigate to "tab new" (preserving leading
+// flags) so CDP attach opens a tab in the existing window rather than a new OS window.
 func rewriteOpenToTabNew(args []string) []string {
-	if len(args) == 0 {
+	idx := firstAgentBrowserCommandIndex(args)
+	if idx < 0 {
 		return args
 	}
-	cmd := args[0]
+	cmd := args[idx]
 	switch cmd {
 	case "open", "goto", "navigate":
-		rest := args[1:]
+		prefix := args[:idx]
+		rest := args[idx+1:]
 		url := "about:blank"
 		outRest := rest
 		if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
 			url = rest[0]
 			outRest = rest[1:]
 		}
-		out := make([]string, 0, 2+len(outRest))
+		out := make([]string, 0, len(prefix)+2+len(outRest))
+		out = append(out, prefix...)
 		out = append(out, "tab", "new", url)
 		out = append(out, outRest...)
 		return out

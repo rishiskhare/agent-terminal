@@ -64,6 +64,8 @@ func TestManagedAgentsMDRouting(t *testing.T) {
 		"Web Search",
 		"search for …",
 		"AGENT_TERMINAL_BROWSER",
+		"AGENT_BROWSER_SESSION",
+		"close --all",
 		"cannot attach to your live Chrome",
 		"Auto-launch failed",
 		"Do not open Chrome",

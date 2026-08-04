@@ -17,6 +17,7 @@ func TestIsBrowserGatePassthrough(t *testing.T) {
 		{[]string{"--version"}, true},
 		{[]string{"skills", "get", "core"}, true},
 		{[]string{"close", "--all"}, true},
+		{[]string{"--session", "x", "close"}, true},
 		{[]string{"open", "https://example.com"}, false},
 		{[]string{"--auto-connect", "snapshot", "-i"}, false},
 		{[]string{"snapshot"}, false},
@@ -30,40 +31,74 @@ func TestIsBrowserGatePassthrough(t *testing.T) {
 
 func TestRewriteAgentBrowserArgs(t *testing.T) {
 	ws := "ws://127.0.0.1:9222/devtools/browser/x"
-	got := rewriteAgentBrowserArgs([]string{"--auto-connect", "open", "https://x.test"}, ws)
+	got := rewriteAgentBrowserArgs([]string{"--auto-connect", "open", "https://x.test"}, ws, "")
 	want := []string{"--cdp", ws, "tab", "new", "https://x.test"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
 
-	got = rewriteAgentBrowserArgs([]string{"--cdp", "9999", "snapshot"}, ws)
+	got = rewriteAgentBrowserArgs([]string{"--cdp", "9999", "snapshot"}, ws, "")
 	want = []string{"--cdp", ws, "snapshot"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("strip cdp: got %v want %v", got, want)
 	}
 
-	got = rewriteAgentBrowserArgs([]string{"--cdp=ws://old", "click", "@e1"}, ws)
+	got = rewriteAgentBrowserArgs([]string{"--cdp=ws://old", "click", "@e1"}, ws, "")
 	want = []string{"--cdp", ws, "click", "@e1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("strip cdp=: got %v want %v", got, want)
 	}
 
-	got = rewriteAgentBrowserArgs([]string{"goto", "https://a.test"}, ws)
+	got = rewriteAgentBrowserArgs([]string{"goto", "https://a.test"}, ws, "")
 	want = []string{"--cdp", ws, "tab", "new", "https://a.test"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("goto: got %v want %v", got, want)
 	}
 
-	got = rewriteAgentBrowserArgs([]string{"open"}, ws)
+	got = rewriteAgentBrowserArgs([]string{"open"}, ws, "")
 	want = []string{"--cdp", ws, "tab", "new", "about:blank"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("open bare: got %v want %v", got, want)
 	}
 
-	got = rewriteAgentBrowserArgs([]string{"window", "new"}, ws)
+	got = rewriteAgentBrowserArgs([]string{"window", "new"}, ws, "")
 	want = []string{"--cdp", ws, "window", "new"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("window new left alone: got %v want %v", got, want)
+	}
+}
+
+func TestRewriteAgentBrowserArgsForcesSession(t *testing.T) {
+	ws := "ws://127.0.0.1:9222/devtools/browser/x"
+	got := rewriteAgentBrowserArgs(
+		[]string{"--session", "default", "open", "https://x.test"},
+		ws,
+		"at-abc",
+	)
+	want := []string{"--cdp", ws, "--session", "at-abc", "tab", "new", "https://x.test"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("force session: got %v want %v", got, want)
+	}
+
+	got = rewriteAgentBrowserArgs(
+		[]string{"--session=other", "snapshot", "-i"},
+		ws,
+		"at-abc",
+	)
+	want = []string{"--cdp", ws, "--session", "at-abc", "snapshot", "-i"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("strip session=: got %v want %v", got, want)
+	}
+
+	// Without env session, leave agent --session alone (still rewrite open).
+	got = rewriteAgentBrowserArgs(
+		[]string{"--session", "keep-me", "open", "https://y.test"},
+		ws,
+		"",
+	)
+	want = []string{"--cdp", ws, "--session", "keep-me", "tab", "new", "https://y.test"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("preserve session when unset: got %v want %v", got, want)
 	}
 }
 
@@ -77,6 +112,11 @@ func TestRewriteOpenToTabNew(t *testing.T) {
 	want = []string{"snapshot", "-i"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("non-open: got %v want %v", got, want)
+	}
+	got = rewriteOpenToTabNew([]string{"--session", "s1", "open", "https://z.test"})
+	want = []string{"--session", "s1", "tab", "new", "https://z.test"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("flag-prefixed open: got %v want %v", got, want)
 	}
 }
 
@@ -94,16 +134,14 @@ func TestFirstAgentBrowserCommand(t *testing.T) {
 func TestScrubEnvVar(t *testing.T) {
 	env := []string{"FOO=1", "AGENT_BROWSER_AUTO_CONNECT=1", "BAR=2"}
 	got := scrubEnvVar(env, "AGENT_BROWSER_AUTO_CONNECT")
-	if len(got) != 2 || got[0] != "FOO=1" || got[1] != "BAR=2" {
-		t.Fatalf("got %v", got)
+	want := []string{"FOO=1", "BAR=2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
 	}
 }
 
-func TestArgsHaveCDP(t *testing.T) {
-	if !argsHaveCDP([]string{"--cdp", "ws://x", "snapshot"}) {
-		t.Fatal("expected true")
-	}
-	if argsHaveCDP([]string{"snapshot"}) {
-		t.Fatal("expected false")
+func TestBrowserSessionName(t *testing.T) {
+	if got := browserSessionName("abc123"); got != "at-abc123" {
+		t.Fatalf("got %q", got)
 	}
 }

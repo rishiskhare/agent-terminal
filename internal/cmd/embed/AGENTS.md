@@ -6,6 +6,10 @@ Live Google Chrome is the attach target (primary profile; visible tabs).
 Never scratchpad Chrome or Chrome-for-Testing.
 `open` / `goto` / `navigate` open a **tab** in the existing window.
 
+Each side-panel terminal already has an isolated browser session via
+`AGENT_BROWSER_SESSION` (automatic). Do not unset it and do not pass `--session`.
+Do not run `close --all` (that wipes every concurrent agent’s browser session).
+
 ## Use the Agent Terminal browser shim (shell)
 
 Call the **shim** (not a bare `agent-browser` from Hermès/npm that may skip the gate):
@@ -43,7 +47,7 @@ Tell the user (Chrome may already be open):
 
 1. Click **Allow** if an “Allow remote debugging?” dialog is showing
 2. Keep Google Chrome open with remote debugging on (`chrome://inspect/#remote-debugging`)
-3. Run `agent-terminal doctor --fix` if it still fails
+3. Run `agent-terminal doctor --fix` if it still fails (this clears **all** browser sessions)
 
 After a **Chrome restart**, one Allow click is expected.
 <!-- agent-terminal:end -->

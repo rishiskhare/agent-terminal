@@ -87,13 +87,14 @@ func (m *SessionManager) wsURL(id string) string {
 	return fmt.Sprintf("ws://127.0.0.1:%d/tty/%s", m.port, id)
 }
 
-func (m *SessionManager) Create(cmdFactory func(tty pty.Pty) (*pty.Cmd, error)) (*Session, error) {
+func (m *SessionManager) Create(cmdFactory func(tty pty.Pty, id string) (*pty.Cmd, error)) (*Session, error) {
 	tty, err := pty.New()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pty: %w", err)
 	}
 
-	cmd, err := cmdFactory(tty)
+	id := strings.ToLower(rand.Text())
+	cmd, err := cmdFactory(tty, id)
 	if err != nil {
 		tty.Close()
 		return nil, err
@@ -104,7 +105,6 @@ func (m *SessionManager) Create(cmdFactory func(tty pty.Pty) (*pty.Cmd, error)) 
 		return nil, fmt.Errorf("failed to start pty: %w", err)
 	}
 
-	id := strings.ToLower(rand.Text())
 	session := &Session{
 		ID:  id,
 		Pty: tty,
@@ -135,6 +135,10 @@ func (m *SessionManager) Destroy(id string) error {
 		return fmt.Errorf("invalid tty ID: %s", id)
 	}
 	session.close()
+	// Best-effort: drop this PTY's agent-browser session only (never close --all).
+	if err := closeNamedAgentBrowserSession(browserSessionName(id)); err != nil {
+		m.logger.Debug("agent-browser session close", "session", browserSessionName(id), "error", err)
+	}
 	return nil
 }
 
@@ -316,8 +320,8 @@ func NewMessagingHost(logger *slog.Logger, sessions *SessionManager) *jsonrpc.Ho
 			}
 		}
 
-		session, err := sessions.Create(func(tty pty.Pty) (*pty.Cmd, error) {
-			return buildPtyCommand(tty, mode, app, params.Args, params.Cwd)
+		session, err := sessions.Create(func(tty pty.Pty, id string) (*pty.Cmd, error) {
+			return buildPtyCommand(tty, id, mode, app, params.Args, params.Cwd)
 		})
 		if err != nil {
 			return nil, err
@@ -594,7 +598,11 @@ func appExists(app string) bool {
 	return false
 }
 
-func buildPtyCommand(tty pty.Pty, mode, app string, args []string, cwd string) (*pty.Cmd, error) {
+func browserSessionName(ttyID string) string {
+	return "at-" + ttyID
+}
+
+func buildPtyCommand(tty pty.Pty, id, mode, app string, args []string, cwd string) (*pty.Cmd, error) {
 	var cmd *pty.Cmd
 	if mode == "app" && app != "" {
 		entrypoint := filepath.Join(appDir, app)
@@ -646,11 +654,14 @@ func buildPtyCommand(tty pty.Pty, mode, app string, args []string, cwd string) (
 	pathForPty := prependPath(firstNonEmpty(ptyEnv["PATH"], os.Getenv("PATH")), shimDir)
 	ptyEnv = copyStringMap(ptyEnv)
 	ptyEnv["PATH"] = pathForPty
+	// AGENT_BROWSER_SESSION is forced last so config env cannot override isolation.
 	cmd.Env = mergePtyEnv(os.Environ(), map[string]string{
 		"TERM":                   "xterm-256color",
 		"TERM_PROGRAM":           "agent-terminal",
 		"AGENT_TERMINAL_BROWSER": filepath.Join(shimDir, "agent-browser"),
-	}, ptyEnv)
+	}, ptyEnv, map[string]string{
+		"AGENT_BROWSER_SESSION": browserSessionName(id),
+	})
 
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -658,9 +669,8 @@ func buildPtyCommand(tty pty.Pty, mode, app string, args []string, cwd string) (
 		cmd.Dir = os.Getenv("HOME")
 	}
 
-	// Best-effort: clear stale agent-browser daemons after Chrome sleep/reopen
-	// before the agent issues its first browser command.
-	go healAgentBrowserBestEffort()
+	// Do not heal/close --all here: that nukes sibling PTY browser sessions.
+	// Gate heals on the first browser command when the CDP fingerprint changes.
 
 	return cmd, nil
 }
@@ -711,19 +721,6 @@ func mergePtyEnv(base []string, overlays ...map[string]string) []string {
 		out = append(out, key+"="+envMap[key])
 	}
 	return out
-}
-
-func healAgentBrowserBestEffort() {
-	real := loadRealAgentBrowserPath()
-	if real == "" {
-		return
-	}
-	if _, err := os.Stat(real); err != nil {
-		return
-	}
-	if err := healStaleAgentBrowserSessions(real); err != nil {
-		log.Printf("agent-browser heal: %v", err)
-	}
 }
 
 func NewWebSocketHandler(sessions *SessionManager) http.Handler {

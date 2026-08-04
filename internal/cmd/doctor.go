@@ -193,14 +193,14 @@ func runDoctor(fix bool) (*DoctorStatus, error) {
 					Label:   "agent-browser session",
 					Status:  "warn",
 					Detail:  err.Error(),
-					FixHint: "Run: agent-browser close --all",
+					FixHint: "doctor --fix runs close --all (wipes every side-panel browser session)",
 				})
 			} else {
 				status.Checks = append(status.Checks, DoctorCheck{
 					ID:     "agentBrowserSession",
 					Label:  "agent-browser session",
 					Status: "ok",
-					Detail: "Cleared stale sessions so the next command uses live Chrome",
+					Detail: "Cleared all agent-browser sessions (destructive to concurrent Claudes) so the next command uses live Chrome",
 				})
 			}
 		}
@@ -461,6 +461,30 @@ func resetAgentBrowserSessions(realBinary string) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// close --all can fail if nothing is running; treat as ok when message is benign.
+		msg := strings.ToLower(string(out) + err.Error())
+		if strings.Contains(msg, "no session") || strings.Contains(msg, "not found") || strings.Contains(msg, "no running") {
+			return nil
+		}
+		return fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// closeNamedAgentBrowserSession closes one agent-browser session (never --all).
+func closeNamedAgentBrowserSession(sessionName string) error {
+	if sessionName == "" {
+		return nil
+	}
+	real := loadRealAgentBrowserPath()
+	if real == "" {
+		return nil
+	}
+	if _, err := os.Stat(real); err != nil {
+		return nil
+	}
+	cmd := exec.Command(real, "--session", sessionName, "close")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		msg := strings.ToLower(string(out) + err.Error())
 		if strings.Contains(msg, "no session") || strings.Contains(msg, "not found") || strings.Contains(msg, "no running") {
 			return nil

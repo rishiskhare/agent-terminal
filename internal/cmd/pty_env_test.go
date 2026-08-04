@@ -37,3 +37,21 @@ func TestPrependPathKeepsShimFirst(t *testing.T) {
 		t.Fatalf("prependPath: %q", got)
 	}
 }
+
+func TestMergePtyEnvForcesBrowserSessionLast(t *testing.T) {
+	base := []string{"HOME=/Users/test"}
+	got := mergePtyEnv(base,
+		map[string]string{"AGENT_TERMINAL_BROWSER": "/shim/agent-browser"},
+		map[string]string{"AGENT_BROWSER_SESSION": "default", "PATH": "/usr/bin"},
+		map[string]string{"AGENT_BROWSER_SESSION": "at-ttyid"},
+	)
+	var session string
+	for _, e := range got {
+		if strings.HasPrefix(e, "AGENT_BROWSER_SESSION=") {
+			session = strings.TrimPrefix(e, "AGENT_BROWSER_SESSION=")
+		}
+	}
+	if session != "at-ttyid" {
+		t.Fatalf("config env overrode session: %q in %v", session, got)
+	}
+}
