@@ -9,3 +9,7 @@
 /completions/
 /bin/
 /tweety
+
+# extension
+extension/node_modules/
+extension/dist/

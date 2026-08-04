@@ -9,26 +9,12 @@ export default defineConfig({
         description: "An integrated terminal for your browser",
         version: process.env.MANIFEST_VERSION || "0.0.0",
         permissions: [
-            "tabs",
             "nativeMessaging",
-            "contextMenus",
-            "notifications",
-            "bookmarks",
-            "history",
-            "scripting",
+            "sidePanel",
             "storage"
         ],
-        host_permissions: [
-            "<all_urls>"
-        ],
-        commands: {
-            openInNewTab: {
-                description: "Open in new tab",
-
-            },
-            openInNewWindow: {
-                description: "Open in new window",
-            }
+        side_panel: {
+            default_path: "sidepanel.html",
         },
         browser_specific_settings: browser == "firefox" ? {
             gecko: {

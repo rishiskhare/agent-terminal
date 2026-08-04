@@ -90,14 +90,7 @@ func NewCmdRoot(version string) *cobra.Command {
 	cmd.AddCommand(
 		NewCmdServe(),
 		NewCmdInstall(),
-		NewCmdTabs(),
-		NewCmdBookmarks(),
-		NewCmdHistory(),
-		NewCmdWindows(),
-		NewCmdNotifications(),
 		NewCmdRun(),
-		NewCmdOpen(),
-		NewCmdFetch(),
 	)
 
 	return cmd

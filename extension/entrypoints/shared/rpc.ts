@@ -19,10 +19,20 @@ export type RequestResizeTTY = JSONRPCRequestBase<"tty.resize", {
 }>
 
 export type RequestCreateTTY = JSONRPCRequestBase<"tty.create", {
-    mode: "app";
-    app: string;
-    args: string[];
+    mode?: "app";
+    app?: string;
+    args?: string[];
     cwd?: string;
+}>
+
+export type RequestAttachTTY = JSONRPCRequestBase<"tty.attach", {
+    id: string;
+}>
+
+export type RequestListTTY = JSONRPCRequestBase<"tty.list", undefined>
+
+export type RequestDestroyTTY = JSONRPCRequestBase<"tty.destroy", {
+    id: string;
 }>
 
 export type RequestGetXtermConfig = JSONRPCRequestBase<"xterm.getConfig", {
@@ -62,6 +72,8 @@ export type ResponseCreateTTY = JSONRPCResponseBase<{
     url: string;
 }>
 
+export type ResponseAttachTTY = ResponseCreateTTY
 
-
-
+export type ResponseListTTY = JSONRPCResponseBase<{
+    sessions: { id: string }[];
+}>

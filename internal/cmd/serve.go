@@ -24,11 +24,183 @@ import (
 	"github.com/aymanbagabas/go-pty"
 	"github.com/gorilla/websocket"
 	"github.com/pomdtr/tweety/internal/jsonrpc"
+	"github.com/pomdtr/tweety/internal/scrollback"
 	"github.com/spf13/cobra"
 )
 
 //go:embed all:themes
 var themeFs embed.FS
+
+const scrollbackBytes = 2 << 20 // 2 MiB
+
+type Session struct {
+	ID  string
+	Pty pty.Pty
+	Buf *scrollback.Ring
+
+	mu      sync.Mutex
+	writeMu sync.Mutex // serializes websocket writes (replay, live, ping)
+	client  *websocket.Conn
+	cols    int
+	rows    int
+	closed  bool
+}
+
+type SessionManager struct {
+	mu       sync.RWMutex
+	sessions map[string]*Session
+	port     int
+	logger   *slog.Logger
+}
+
+func NewSessionManager(port int, logger *slog.Logger) *SessionManager {
+	return &SessionManager{
+		sessions: make(map[string]*Session),
+		port:     port,
+		logger:   logger,
+	}
+}
+
+func (m *SessionManager) Get(id string) (*Session, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s, ok := m.sessions[id]
+	return s, ok
+}
+
+func (m *SessionManager) List() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ids := make([]string, 0, len(m.sessions))
+	for id, s := range m.sessions {
+		s.mu.Lock()
+		closed := s.closed
+		s.mu.Unlock()
+		if !closed {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func (m *SessionManager) wsURL(id string) string {
+	return fmt.Sprintf("ws://127.0.0.1:%d/tty/%s", m.port, id)
+}
+
+func (m *SessionManager) Create(cmdFactory func(tty pty.Pty) (*pty.Cmd, error)) (*Session, error) {
+	tty, err := pty.New()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create pty: %w", err)
+	}
+
+	cmd, err := cmdFactory(tty)
+	if err != nil {
+		tty.Close()
+		return nil, err
+	}
+
+	if err := cmd.Start(); err != nil {
+		tty.Close()
+		return nil, fmt.Errorf("failed to start pty: %w", err)
+	}
+
+	id := strings.ToLower(rand.Text())
+	session := &Session{
+		ID:  id,
+		Pty: tty,
+		Buf: scrollback.New(scrollbackBytes),
+	}
+
+	m.mu.Lock()
+	m.sessions[id] = session
+	m.mu.Unlock()
+
+	go session.readLoop(m.logger)
+	go func() {
+		_ = cmd.Wait()
+		session.markClosed()
+	}()
+
+	return session, nil
+}
+
+func (m *SessionManager) Destroy(id string) error {
+	m.mu.Lock()
+	session, ok := m.sessions[id]
+	if ok {
+		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("invalid tty ID: %s", id)
+	}
+	session.close()
+	return nil
+}
+
+func (s *Session) markClosed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+}
+
+func (s *Session) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	if s.client != nil {
+		_ = s.client.Close()
+		s.client = nil
+	}
+	_ = s.Pty.Close()
+}
+
+func (s *Session) readLoop(logger *slog.Logger) {
+	buf := make([]byte, maxBufferSizeBytes)
+	for {
+		n, err := s.Pty.Read(buf)
+		if n > 0 {
+			chunk := append([]byte(nil), buf[:n]...)
+			_, _ = s.Buf.Write(chunk)
+
+			s.mu.Lock()
+			conn := s.client
+			s.mu.Unlock()
+			if conn != nil {
+				s.writeMu.Lock()
+				writeErr := conn.WriteMessage(websocket.BinaryMessage, chunk)
+				s.writeMu.Unlock()
+				if writeErr != nil {
+					logger.Debug("failed to write tty output to websocket", "error", writeErr)
+				}
+			}
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
+				logger.Debug("pty read ended", "error", err, "session", s.ID)
+			}
+			s.markClosed()
+			return
+		}
+	}
+}
+
+func (s *Session) attach(conn *websocket.Conn) {
+	s.mu.Lock()
+	if s.client != nil {
+		_ = s.client.Close()
+	}
+	s.client = conn
+	s.mu.Unlock()
+}
+
+func (s *Session) detach(conn *websocket.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client == conn {
+		s.client = nil
+	}
+}
 
 func NewCmdServe() *cobra.Command {
 	cmd := &cobra.Command{
@@ -48,7 +220,6 @@ func NewCmdServe() *cobra.Command {
 				os.Exit(1)
 			}
 			defer logFile.Close()
-			// create new slog logger
 			logger := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{}))
 
 			port, err := getFreePort()
@@ -56,10 +227,10 @@ func NewCmdServe() *cobra.Command {
 				return fmt.Errorf("failed to get free port: %w", err)
 			}
 
-			ttyMap := make(map[string]pty.Pty)
-			messagingHost := NewMessagingHost(logger, port, ttyMap)
+			sessions := NewSessionManager(port, logger)
+			messagingHost := NewMessagingHost(logger, sessions)
 
-			handler := NewWebSocketHandler(ttyMap)
+			handler := NewWebSocketHandler(sessions)
 
 			logger.Info("Listening", "port", port)
 
@@ -68,10 +239,8 @@ func NewCmdServe() *cobra.Command {
 				Handler: handler,
 			}
 
-			// Channel to signal when messaging host stops
 			done := make(chan error, 1)
 
-			// Start messaging host
 			go func() {
 				if err := messagingHost.Listen(); err != nil {
 					logger.Error("Messaging host listen loop exited", "error", err)
@@ -82,7 +251,6 @@ func NewCmdServe() *cobra.Command {
 				}
 			}()
 
-			// Start HTTP server
 			go func() {
 				if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					logger.Error("HTTP server error", "error", err)
@@ -90,7 +258,6 @@ func NewCmdServe() *cobra.Command {
 				}
 			}()
 
-			// Wait for either messaging host to stop or server error
 			err = <-done
 			logger.Info("Shutting down server")
 			server.Shutdown(context.Background())
@@ -101,23 +268,7 @@ func NewCmdServe() *cobra.Command {
 	return cmd
 }
 
-type HandlerParams struct {
-	Logger *slog.Logger
-	Port   int
-}
-
-type MessagingHostParams struct {
-	Logger *slog.Logger
-	Port   int
-	TTYMap map[string]*os.File
-}
-
-type Command struct {
-	ID   string          `json:"id"`
-	Meta CommandMetadata `json:"meta"`
-}
-
-// CommandMetadata holds the structured metadata extracted from the script file.
+// CommandMetadata holds structured metadata extracted from script files.
 type CommandMetadata struct {
 	Title               string   `json:"title"`
 	Contexts            []string `json:"contexts"`
@@ -125,7 +276,7 @@ type CommandMetadata struct {
 	TargetUrlPatterns   []string `json:"targetUrlPatterns,omitempty"`
 }
 
-func NewMessagingHost(logger *slog.Logger, port int, ptyMap map[string]pty.Pty) *jsonrpc.Host {
+func NewMessagingHost(logger *slog.Logger, sessions *SessionManager) *jsonrpc.Host {
 	messagingHost := jsonrpc.NewHost(logger)
 
 	messagingHost.HandleRequest("initialize", func(input []byte) (any, error) {
@@ -139,46 +290,6 @@ func NewMessagingHost(logger *slog.Logger, port int, ptyMap map[string]pty.Pty) 
 		}
 
 		logger.Info("Received initialize notification", "version", params.Version, "browserId", params.BrowserID)
-		socketPath := filepath.Join(cacheDir, "sockets", fmt.Sprintf("%s.sock", params.BrowserID))
-		if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
-			return nil, fmt.Errorf("failed to create socket directory: %w", err)
-		}
-
-		os.Setenv("TWEETY_SOCKET", socketPath)
-		if _, err := os.Stat(socketPath); err == nil {
-			if err := os.Remove(socketPath); err != nil {
-				log.Printf("Failed to remove existing socket file: %s", err)
-				return nil, fmt.Errorf("failed to remove existing socket file: %w", err)
-			}
-		}
-
-		// create a listener
-		listener, err := net.Listen("unix", socketPath)
-		if err != nil {
-			logger.Error("Failed to create unix socket listener", "error", err)
-			return nil, fmt.Errorf("failed to create unix socket listener: %w", err)
-		}
-
-		go http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var request jsonrpc.JSONRPCRequest
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				http.Error(w, fmt.Sprintf("failed to decode request: %s", err), http.StatusBadRequest)
-				return
-			}
-
-			resp, err := messagingHost.SendRequest(request)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("failed to send request: %s", err), http.StatusInternalServerError)
-				return
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(resp); err != nil {
-				http.Error(w, fmt.Sprintf("failed to encode response: %s", err), http.StatusInternalServerError)
-				return
-			}
-		}))
-
 		return map[string]any{}, nil
 	})
 
@@ -197,84 +308,67 @@ func NewMessagingHost(logger *slog.Logger, port int, ptyMap map[string]pty.Pty) 
 			}
 		}
 
-		tty, err := pty.New()
+		session, err := sessions.Create(func(tty pty.Pty) (*pty.Cmd, error) {
+			return buildPtyCommand(tty, params.Mode, params.App, params.Args, params.Cwd)
+		})
 		if err != nil {
-			log.Printf("failed to create pty: %s", err)
-			return nil, fmt.Errorf("failed to create pty: %w", err)
+			return nil, err
 		}
-
-		var cmd *pty.Cmd
-		if params.Mode == "app" && params.App != "" {
-			// First try to find the exact file name
-			entrypoint := filepath.Join(appDir, params.App)
-			stat, err := os.Stat(entrypoint)
-
-			// If not found, try to find any file that starts with the app name
-			if os.IsNotExist(err) {
-				files, readErr := os.ReadDir(appDir)
-				if readErr == nil {
-					for _, file := range files {
-						if file.IsDir() {
-							continue
-						}
-
-						name := file.Name()
-						nameWithoutExt := strings.TrimSuffix(name, filepath.Ext(name))
-
-						if nameWithoutExt == params.App {
-							entrypoint = filepath.Join(appDir, name)
-							stat, err = os.Stat(entrypoint)
-							break
-						}
-					}
-				}
-			}
-
-			if err != nil {
-				return nil, fmt.Errorf("failed to stat app entrypoint: %w", err)
-			}
-
-			if stat.IsDir() {
-				return nil, fmt.Errorf("app entrypoint is a directory, expected a file: %s", entrypoint)
-			}
-
-			// check if the entrypoint is executable
-			if stat.Mode()&0111 == 0 {
-				if err := os.Chmod(entrypoint, 0755); err != nil {
-					return nil, fmt.Errorf("failed to make app entrypoint executable: %w", err)
-				}
-			}
-
-			cmd = tty.Command(entrypoint, params.Args...)
-		} else {
-			cmd = tty.Command(k.String("command"), k.Strings("args")...)
-		}
-
-		cmd.Env = os.Environ()
-		cmd.Env = append(cmd.Env, "TERM=xterm-256color")
-		cmd.Env = append(cmd.Env, "TERM_PROGRAM=tweety")
-		for key, value := range k.StringMap("env") {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
-		}
-
-		if params.Cwd != "" {
-			cmd.Dir = params.Cwd
-		} else {
-			cmd.Dir = os.Getenv("HOME")
-		}
-
-		if err := cmd.Start(); err != nil {
-			log.Printf("failed to start pty: %s", err)
-			return nil, fmt.Errorf("failed to start pty: %w", err)
-		}
-
-		ttyID := strings.ToLower(rand.Text())
-		ptyMap[ttyID] = tty
 
 		return map[string]string{
-			"url": fmt.Sprintf("ws://127.0.0.1:%d/tty/%s", port, ttyID),
-			"id":  ttyID,
+			"url": sessions.wsURL(session.ID),
+			"id":  session.ID,
 		}, nil
+	})
+
+	messagingHost.HandleRequest("tty.attach", func(input []byte) (any, error) {
+		var params struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(input, &params); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal attach params: %w", err)
+		}
+		if params.ID == "" {
+			return nil, fmt.Errorf("id is required")
+		}
+
+		session, ok := sessions.Get(params.ID)
+		if !ok {
+			return nil, fmt.Errorf("invalid tty ID: %s", params.ID)
+		}
+		session.mu.Lock()
+		closed := session.closed
+		session.mu.Unlock()
+		if closed {
+			return nil, fmt.Errorf("tty session is closed: %s", params.ID)
+		}
+
+		return map[string]string{
+			"url": sessions.wsURL(session.ID),
+			"id":  session.ID,
+		}, nil
+	})
+
+	messagingHost.HandleRequest("tty.list", func(input []byte) (any, error) {
+		ids := sessions.List()
+		items := make([]map[string]string, 0, len(ids))
+		for _, id := range ids {
+			items = append(items, map[string]string{"id": id})
+		}
+		return map[string]any{"sessions": items}, nil
+	})
+
+	messagingHost.HandleRequest("tty.destroy", func(input []byte) (any, error) {
+		var params struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(input, &params); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal destroy params: %w", err)
+		}
+		if err := sessions.Destroy(params.ID); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, nil
 	})
 
 	messagingHost.HandleNotification("tty.resize", func(input []byte) error {
@@ -287,14 +381,18 @@ func NewMessagingHost(logger *slog.Logger, port int, ptyMap map[string]pty.Pty) 
 			return fmt.Errorf("failed to unmarshal resize params: %w", err)
 		}
 
-		tty, ok := ptyMap[requestParams.TTY]
+		session, ok := sessions.Get(requestParams.TTY)
 		if !ok {
 			return fmt.Errorf("invalid tty ID: %s", requestParams.TTY)
 		}
 
-		if err := tty.Resize(requestParams.Cols, requestParams.Rows); err != nil {
+		if err := session.Pty.Resize(requestParams.Cols, requestParams.Rows); err != nil {
 			return fmt.Errorf("failed to set size for tty: %w", err)
 		}
+		session.mu.Lock()
+		session.cols = requestParams.Cols
+		session.rows = requestParams.Rows
+		session.mu.Unlock()
 
 		return nil
 	})
@@ -386,27 +484,82 @@ func NewMessagingHost(logger *slog.Logger, port int, ptyMap map[string]pty.Pty) 
 	return messagingHost
 }
 
-func NewWebSocketHandler(ptyMap map[string]pty.Pty) http.Handler {
+func buildPtyCommand(tty pty.Pty, mode, app string, args []string, cwd string) (*pty.Cmd, error) {
+	var cmd *pty.Cmd
+	if mode == "app" && app != "" {
+		entrypoint := filepath.Join(appDir, app)
+		stat, err := os.Stat(entrypoint)
+
+		if os.IsNotExist(err) {
+			files, readErr := os.ReadDir(appDir)
+			if readErr == nil {
+				for _, file := range files {
+					if file.IsDir() {
+						continue
+					}
+
+					name := file.Name()
+					nameWithoutExt := strings.TrimSuffix(name, filepath.Ext(name))
+
+					if nameWithoutExt == app {
+						entrypoint = filepath.Join(appDir, name)
+						stat, err = os.Stat(entrypoint)
+						break
+					}
+				}
+			}
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to stat app entrypoint: %w", err)
+		}
+
+		if stat.IsDir() {
+			return nil, fmt.Errorf("app entrypoint is a directory, expected a file: %s", entrypoint)
+		}
+
+		if stat.Mode()&0111 == 0 {
+			if err := os.Chmod(entrypoint, 0755); err != nil {
+				return nil, fmt.Errorf("failed to make app entrypoint executable: %w", err)
+			}
+		}
+
+		cmd = tty.Command(entrypoint, args...)
+	} else {
+		cmd = tty.Command(k.String("command"), k.Strings("args")...)
+	}
+
+	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
+	cmd.Env = append(cmd.Env, "TERM_PROGRAM=tweety")
+	for key, value := range k.StringMap("env") {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	if cwd != "" {
+		cmd.Dir = cwd
+	} else {
+		cmd.Dir = os.Getenv("HOME")
+	}
+
+	return cmd, nil
+}
+
+func NewWebSocketHandler(sessions *SessionManager) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ttyID := strings.TrimPrefix(r.URL.Path, "/tty/")
-		tty, ok := ptyMap[ttyID]
+		session, ok := sessions.Get(ttyID)
 		if !ok {
 			http.Error(w, fmt.Sprintf("invalid terminal ID: %s", ttyID), http.StatusBadRequest)
 			return
 		}
 
-		defer func() {
-			delete(ptyMap, ttyID)
-			tty.Close()
-		}()
-
-		HandleWebsocket(ptyMap[ttyID])(w, r)
+		HandleWebsocket(session)(w, r)
 	})
 }
 
-func HandleWebsocket(tty pty.Pty) http.HandlerFunc {
+func HandleWebsocket(session *Session) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Print("established connection identity")
 		upgrader := getConnectionUpgrader(maxBufferSizeBytes)
 		connection, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -415,51 +568,19 @@ func HandleWebsocket(tty pty.Pty) http.HandlerFunc {
 		}
 		defer connection.Close()
 
-		var waiter sync.WaitGroup
-		waiter.Add(1)
-
-		// tty << xterm.js
-		go func() {
-			for {
-				// data processing
-				_, data, err := connection.ReadMessage()
-				if err != nil {
-					log.Printf("failed to get next reader: %s", err)
-					waiter.Done()
-					return
-				}
-				dataLength := len(data)
-				dataBuffer := bytes.Trim(data, "\x00")
-
-				// process
-				if dataLength == -1 { // invalid
-					log.Printf("failed to get the correct number of bytes read, ignoring message")
-					continue
-				}
-
-				// write to tty
-				if _, err := tty.Write(dataBuffer); err != nil {
-					log.Printf("failed to write %v bytes to tty: %s", len(dataBuffer), err)
-					continue
-				}
+		// Replay scrollback, then attach for live output — under writeMu so
+		// the persistent reader cannot interleave frames mid-replay.
+		session.writeMu.Lock()
+		if snapshot := session.Buf.Bytes(); len(snapshot) > 0 {
+			if err := connection.WriteMessage(websocket.BinaryMessage, snapshot); err != nil {
+				session.writeMu.Unlock()
+				log.Printf("failed to replay scrollback: %s", err)
+				return
 			}
-		}()
-
-		messages := make(chan []byte)
-		// tty >> xterm.js
-		go func() {
-			for {
-				buffer := make([]byte, maxBufferSizeBytes)
-				readLength, err := tty.Read(buffer)
-				if err != nil {
-					connection.Close()
-					log.Printf("failed to read from tty: %s", err)
-					return
-				}
-
-				messages <- buffer[:readLength]
-			}
-		}()
+		}
+		session.attach(connection)
+		session.writeMu.Unlock()
+		defer session.detach(connection)
 
 		lastPingTime := time.Now()
 		connection.SetPongHandler(func(appData string) error {
@@ -467,32 +588,42 @@ func HandleWebsocket(tty pty.Pty) http.HandlerFunc {
 			return nil
 		})
 
-		// this is a keep-alive loop that ensures connection does not hang-up itself
+		done := make(chan struct{})
+
 		go func() {
 			ticker := time.NewTicker(keepalivePingTimeout / 2)
 			defer ticker.Stop()
 			for {
 				select {
+				case <-done:
+					return
 				case <-ticker.C:
-					if err := connection.WriteMessage(websocket.PingMessage, []byte("keepalive")); err != nil {
-						log.Printf("failed to write ping message")
-					}
-
-					if time.Since(lastPingTime) > keepalivePingTimeout {
-						log.Printf("connection timeout, closing connection")
-						connection.Close()
+					session.writeMu.Lock()
+					err := connection.WriteMessage(websocket.PingMessage, []byte("keepalive"))
+					session.writeMu.Unlock()
+					if err != nil {
 						return
 					}
-				case m := <-messages:
-					if err := connection.WriteMessage(websocket.BinaryMessage, m); err != nil {
-						log.Printf("failed to send %v bytes from tty to xterm.js", len(m))
-						continue
+					if time.Since(lastPingTime) > keepalivePingTimeout {
+						connection.Close()
+						return
 					}
 				}
 			}
 		}()
 
-		waiter.Wait()
+		// Client input → PTY
+		for {
+			_, data, err := connection.ReadMessage()
+			if err != nil {
+				close(done)
+				return
+			}
+			if _, err := session.Pty.Write(bytes.Trim(data, "\x00")); err != nil {
+				log.Printf("failed to write to tty: %s", err)
+				continue
+			}
+		}
 	}
 }
 
@@ -531,16 +662,15 @@ func ExtractMetadata(reader io.Reader) (CommandMetadata, error) {
 	metadataRegex := regexp.MustCompile(`^.*?@tweety\.(\w+)\s+(.*)\s*$`)
 
 	for scanner.Scan() {
-		line := scanner.Text() // Get the raw line
+		line := scanner.Text()
 
 		matches := metadataRegex.FindStringSubmatch(line)
 		if len(matches) < 3 {
-			// No match, or not enough capturing groups (expecting 3: full match, key, value)
 			continue
 		}
 
-		key := matches[1]      // The captured key (e.g., "title")
-		rawValue := matches[2] // The captured value (e.g., "Open in archive.ph" or `["all"]`)
+		key := matches[1]
+		rawValue := matches[2]
 
 		switch key {
 		case "title":
