@@ -49,8 +49,11 @@ body.at-options {
 }
 
 .at-tabs__list {
+    /* Shrink-wrap to tabs so + sits after the last tab; cap width so + stays visible when overflowing. */
     display: flex;
-    flex: 1 1 auto;
+    flex: 0 1 auto;
+    width: max-content;
+    max-width: calc(100% - 28px);
     min-width: 0;
     overflow-x: auto;
     overflow-y: hidden;
@@ -60,6 +63,7 @@ body.at-options {
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    flex: 0 0 auto;
     max-width: 140px;
     padding: 0 6px 0 10px;
     border: none;
@@ -126,16 +130,11 @@ body.at-options {
     flex: 0 0 auto;
     width: 28px;
     border: none;
-    border-left: 1px solid #d0d0d0;
     background: transparent;
     color: inherit;
     font-size: 16px;
     line-height: 1;
     cursor: pointer;
-
-    @media (prefers-color-scheme: dark) {
-        border-left-color: #3a3a3a;
-    }
 }
 
 .at-tabs__add:hover:not(:disabled) {
