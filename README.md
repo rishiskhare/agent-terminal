@@ -2,7 +2,7 @@
 
 An integrated terminal in your browser that lets you use AI coding agents to control live tabs (works with Claude Code, Codex, Cursor, Hermes, and more).
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Chrome](https://img.shields.io/badge/Chrome-MV3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/mv3/)
 
@@ -76,4 +76,4 @@ PRs welcome. For large changes, open an issue first. Keep the extension free of 
 
 ## License
 
-MIT. See [LICENSE-MIT](LICENSE-MIT). Based on [Tweety](https://github.com/pomdtr/tweety) by Achille Lacoin.
+This project is licensed under the MIT License. See [LICENSE](LICENSE). Based on [Tweety](https://github.com/pomdtr/tweety) by Achille Lacoin.

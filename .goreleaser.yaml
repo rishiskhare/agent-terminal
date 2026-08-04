@@ -24,7 +24,7 @@ archives:
         formats: ["zip"]
     files:
       - README.md
-      - LICENSE-MIT
+      - LICENSE
       - completions/*
       - src: extension/dist/chrome-mv3/*
         dst: extensions/chrome
