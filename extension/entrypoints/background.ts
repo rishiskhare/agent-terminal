@@ -9,7 +9,7 @@ export default defineBackground(() => {
       return _nativePort;
     }
 
-    const port = browser.runtime.connectNative("com.github.pomdtr.tweety");
+    const port = browser.runtime.connectNative("com.agentterminal.native");
 
     const connected = await new Promise<boolean>((resolve) => {
       const onDisconnect = () => {

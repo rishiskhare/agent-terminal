@@ -39,6 +39,33 @@ export type RequestGetXtermConfig = JSONRPCRequestBase<"xterm.getConfig", {
     variant?: "light" | "dark";
 }>;
 
+export type RequestConfigGet = JSONRPCRequestBase<"config.get", undefined>;
+
+export type RequestConfigSet = JSONRPCRequestBase<"config.set", {
+    config: Record<string, unknown>;
+}>;
+
+export type RequestDoctorStatus = JSONRPCRequestBase<"doctor.status", undefined>;
+
+export type RequestDoctorFix = JSONRPCRequestBase<"doctor.fix", undefined>;
+
+export type DoctorCheck = {
+    id: string;
+    label: string;
+    status: "ok" | "warn" | "error" | "info";
+    detail: string;
+    fixHint?: string;
+};
+
+export type DoctorStatusResult = {
+    ok: boolean;
+    level: "ok" | "warn" | "error";
+    checks: DoctorCheck[];
+    agents?: string[];
+    message: string;
+    config?: Record<string, unknown>;
+};
+
 
 type JSONRPCResponseBase<T extends Record<string, any> = Record<string, any>> = {
     jsonrpc: "2.0";
@@ -77,3 +104,17 @@ export type ResponseAttachTTY = ResponseCreateTTY
 export type ResponseListTTY = JSONRPCResponseBase<{
     sessions: { id: string }[];
 }>
+
+export type ResponseConfigGet = JSONRPCResponseBase<{
+    config: Record<string, unknown>;
+    themes: string[];
+    apps: string[];
+    path: string;
+}>
+
+export type ResponseConfigSet = JSONRPCResponseBase<{
+    config: Record<string, unknown>;
+}>
+
+export type ResponseDoctorStatus = JSONRPCResponseBase<DoctorStatusResult>
+export type ResponseDoctorFix = ResponseDoctorStatus

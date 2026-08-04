@@ -16,9 +16,13 @@ export default defineConfig({
         side_panel: {
             default_path: "sidepanel.html",
         },
+        options_ui: {
+            page: "options.html",
+            open_in_tab: true,
+        },
         browser_specific_settings: browser == "firefox" ? {
             gecko: {
-                id: "tweety@pomdtr.me"
+                id: "agent-terminal@agent-terminal.local"
             }
         } : undefined,
     })

@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Terminal Settings</title>
+    <link rel="stylesheet" href="./shared/styles.css" />
+    <script type="module" src="./shared/options.ts"></script>
+</head>
+
+<body class="at-options">
+    <h1 class="at-options__title">Settings</h1>
+    <div id="status" class="at-status" hidden></div>
+    <form id="settings-form">
+        <div class="at-field">
+            <label for="command">Shell / command</label>
+            <input id="command" name="command" type="text" spellcheck="false" autocomplete="off" />
+        </div>
+        <div class="at-field">
+            <label for="args">Args (space-separated)</label>
+            <input id="args" name="args" type="text" spellcheck="false" autocomplete="off" placeholder="--login" />
+        </div>
+        <div class="at-field">
+            <label for="env">Environment (KEY=value per line)</label>
+            <textarea id="env" name="env" spellcheck="false"></textarea>
+        </div>
+        <div class="at-options__actions">
+            <button type="submit" class="at-btn at-btn--primary">Save</button>
+            <button type="button" class="at-btn" id="run-doctor">Run doctor</button>
+        </div>
+    </form>
+    <p class="at-options__note" id="config-path"></p>
+</body>
+
+</html>

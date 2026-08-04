@@ -12,8 +12,9 @@ import {
     ResponseCreateTTY,
     ResponseGetXtermConfig,
 } from "./rpc";
+import { renderSetupScreen } from "./setup";
 
-const SESSION_STORAGE_KEY = "tweety.ttySessionId";
+const SESSION_STORAGE_KEY = "agent-terminal.ttySessionId";
 
 async function createOrAttachTTY(): Promise<{ id: string; url: string }> {
     const searchParams = new URLSearchParams(window.location.search);
@@ -71,6 +72,16 @@ async function createOrAttachTTY(): Promise<{ id: string; url: string }> {
     return createResp.result;
 }
 
+function isNativeHostError(message: string): boolean {
+    return /native host is not connected/i.test(message);
+}
+
+function showSetup(message: string) {
+    document.body.className = "at-setup-host";
+    document.body.innerHTML = "";
+    document.body.appendChild(renderSetupScreen(message));
+}
+
 async function main() {
     const anchor = document.getElementById("terminal");
     if (!anchor) {
@@ -85,10 +96,10 @@ async function main() {
         params: {
             variant: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
         }
-    })
+    });
 
     if ("error" in xtermResp) {
-        console.error("Error getting Xterm config:", xtermResp.error);
+        showSetup(xtermResp.error.message);
         return;
     }
 
@@ -96,8 +107,9 @@ async function main() {
     try {
         tty = await createOrAttachTTY();
     } catch (err) {
+        const message = (err as Error).message;
         console.error("Error creating/attaching TTY:", err);
-        globalThis.document.body.innerHTML = `<h1>Error: ${(err as Error).message}</h1>`;
+        showSetup(message);
         return;
     }
 
@@ -122,10 +134,7 @@ async function main() {
     });
     fitAddon.fit();
 
-    // Open/fit → WebGL → then Attach, so scrollback/TUI bytes do not hit the
-    // DOM renderer then force glyph-atlas warm-up under load (VS Code order).
-    // IdleTaskQueue "deadline exceeded" warns are benign xterm diagnostics;
-    // do not disable WebGL for them (@xterm/xterm@5.5 hardcodes console.warn).
+    // Open/fit → WebGL → then Attach (VS Code order).
     try {
         const webglAddon = new WebglAddon();
         webglAddon.onContextLoss(() => {
@@ -151,7 +160,7 @@ async function main() {
     };
 
     terminal.onTitleChange((title) => {
-        document.title = `${title}  |  Tweety`
+        document.title = `${title}  |  Agent Terminal`
     });
 
     globalThis.onfocus = () => {

@@ -10,21 +10,30 @@ body {
     margin: 0;
     overflow: hidden;
     padding: 0;
-    /* default background color */
+    height: 100%;
+    display: flex;
+    flex-direction: column;
     background-color: #ffffff;
+    font-family: system-ui, -apple-system, sans-serif;
 
-    /* Dark mode */
     @media (prefers-color-scheme: dark) {
         background-color: #1d1f21;
+        color: #e8eaed;
     }
 }
 
+body.at-setup-host {
+    overflow: auto;
+    display: block;
+    height: auto;
+    padding: 24px;
+}
+
 div#terminal {
-    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
     width: 100%;
-    left: 0;
-    position: absolute;
-    top: 0;
+    position: relative;
 }
 
 .xterm {
@@ -38,23 +47,172 @@ div#terminal {
     box-sizing: border-box;
     position: fixed;
     font-size: 13px;
-    font-family: courier-new, courier, monospace;
-    border-radius: 5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    border-radius: 4px;
     padding: 5px;
-    color: hsl(0, 0%, 0%);
+    color: #000;
     background-color: #fff;
-    border: 1px solid #C8C8C8;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    border: 1px solid #c8c8c8;
 
-    /* Dark mode */
     @media (prefers-color-scheme: dark) {
-        background-color: #2E333A;
+        background-color: #2e333a;
         color: #fff;
-        border: 1px solid #454545;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        border-color: #454545;
     }
 }
 
 .tooltip a {
-    color: #6599EE;
+    color: #6599ee;
+}
+
+/* Setup (native-host disconnect) */
+.at-setup {
+    max-width: 420px;
+}
+
+.at-setup__title {
+    margin: 0 0 12px;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.at-setup__error {
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    background: #fde8e8;
+    color: #7a1f1f;
+    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+    .at-setup__error {
+        background: #3a1c1c;
+        color: #ffb4b4;
+    }
+}
+
+.at-setup__commands {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border-radius: 4px;
+    background: #1d1f21;
+    color: #e8eaed;
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+/* Options */
+.at-options {
+    display: block;
+    overflow: auto;
+    height: auto;
+    min-height: 100%;
+    padding: 24px;
+    box-sizing: border-box;
+    max-width: 520px;
+}
+
+.at-options__title {
+    margin: 0 0 16px;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.at-options__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.at-options__note {
+    margin: 16px 0 0;
+    font-size: 12px;
+    opacity: 0.7;
+    word-break: break-all;
+}
+
+.at-field {
+    margin-bottom: 14px;
+}
+
+.at-field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.at-field input,
+.at-field select,
+.at-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 14px;
+    background: #fff;
+    color: inherit;
+}
+
+@media (prefers-color-scheme: dark) {
+    .at-field input,
+    .at-field select,
+    .at-field textarea {
+        background: #1b1e23;
+        border-color: rgba(255, 255, 255, 0.15);
+    }
+}
+
+.at-field textarea {
+    min-height: 88px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    resize: vertical;
+}
+
+.at-status {
+    margin: 0 0 14px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    background: rgba(31, 75, 122, 0.1);
+}
+
+.at-status--ok {
+    background: rgba(34, 120, 70, 0.12);
+}
+
+.at-status--error {
+    background: rgba(160, 40, 40, 0.12);
+}
+
+.at-btn {
+    appearance: none;
+    border: 1px solid rgba(0, 0, 0, 0.2);
+    background: #fff;
+    color: inherit;
+    border-radius: 4px;
+    padding: 8px 12px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.at-btn--primary {
+    background: #1f4b7a;
+    border-color: #1f4b7a;
+    color: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+    .at-btn {
+        background: #2a2e34;
+        border-color: rgba(255, 255, 255, 0.15);
+    }
 }
