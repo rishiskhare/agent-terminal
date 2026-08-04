@@ -802,15 +802,18 @@ func HandleWebsocket(session *Session) http.HandlerFunc {
 		}
 		defer connection.Close()
 
-		// Replay scrollback, then attach for live output — under writeMu so
-		// the persistent reader cannot interleave frames mid-replay.
+		// Always send one binary replay frame (possibly empty) so the client
+		// can gate onData until xterm finishes parsing it — prevents DA replies
+		// from scrollback CSI queries leaking into the PTY as "1;2c".
 		session.writeMu.Lock()
-		if snapshot := session.Buf.Bytes(); len(snapshot) > 0 {
-			if err := connection.WriteMessage(websocket.BinaryMessage, snapshot); err != nil {
-				session.writeMu.Unlock()
-				log.Printf("failed to replay scrollback: %s", err)
-				return
-			}
+		snapshot := session.Buf.Bytes()
+		if snapshot == nil {
+			snapshot = []byte{}
+		}
+		if err := connection.WriteMessage(websocket.BinaryMessage, snapshot); err != nil {
+			session.writeMu.Unlock()
+			log.Printf("failed to replay scrollback: %s", err)
+			return
 		}
 		session.attach(connection)
 		session.writeMu.Unlock()
@@ -846,12 +849,15 @@ func HandleWebsocket(session *Session) http.HandlerFunc {
 			}
 		}()
 
-		// Client input → PTY
+		// Client input → PTY (binary only; ignore text control frames)
 		for {
-			_, data, err := connection.ReadMessage()
+			msgType, data, err := connection.ReadMessage()
 			if err != nil {
 				close(done)
 				return
+			}
+			if msgType != websocket.BinaryMessage {
+				continue
 			}
 			if session.isClosed() {
 				close(done)

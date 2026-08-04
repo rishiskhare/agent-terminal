@@ -1,6 +1,5 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { AttachAddon } from "@xterm/addon-attach";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import {
@@ -16,6 +15,7 @@ import {
     mountAgentLauncher,
     optsFromAppId,
 } from "./agentLauncher";
+import { PtyAttachHandle, attachPtySocket } from "./ptyAttach";
 import {
     MAX_TABS,
     WindowTabState,
@@ -186,7 +186,7 @@ async function main() {
     let switchGen = 0;
     let activeTtyId = state.activeId;
     let ws: WebSocket | null = null;
-    let attachAddon: AttachAddon | null = null;
+    let ptyAttach: PtyAttachHandle | null = null;
 
     const terminal = new Terminal(xtermResp.result);
     const fitAddon = new FitAddon();
@@ -239,17 +239,15 @@ async function main() {
     }
 
     const detachSocket = () => {
-        if (attachAddon) {
+        if (ptyAttach) {
             try {
-                attachAddon.dispose();
+                ptyAttach.dispose();
             } catch {
                 // already disposed
             }
-            attachAddon = null;
+            ptyAttach = null;
         }
         if (ws) {
-            ws.onmessage = null;
-            ws.onerror = null;
             ws.onclose = null;
             try {
                 ws.close();
@@ -314,30 +312,32 @@ async function main() {
         activeTtyId = endpoint.id;
         ws = new WebSocket(endpoint.url);
         const attachedId = endpoint.id;
-        ws.onclose = () => {
-            if (gen !== switchGen || !state) {
-                return;
-            }
-            if (!state.tabs.includes(attachedId) || state.activeId !== attachedId) {
-                return;
-            }
-            void (async () => {
-                if (gen !== switchGen) {
+        const attachGen = gen;
+        ptyAttach = attachPtySocket(terminal, ws, {
+            isCurrent: () => attachGen === switchGen && ws?.readyState === WebSocket.OPEN,
+            onClose: () => {
+                if (gen !== switchGen || !state) {
                     return;
                 }
-                try {
-                    // Reattach same tty if still alive (e.g. ping timeout);
-                    // attachActive creates a shell only when attach fails.
-                    await attachActive(gen);
-                } catch (err) {
-                    if (gen === switchGen) {
-                        showSetup((err as Error).message);
-                    }
+                if (!state.tabs.includes(attachedId) || state.activeId !== attachedId) {
+                    return;
                 }
-            })();
-        };
-        attachAddon = new AttachAddon(ws);
-        terminal.loadAddon(attachAddon);
+                void (async () => {
+                    if (gen !== switchGen) {
+                        return;
+                    }
+                    try {
+                        // Reattach same tty if still alive (e.g. ping timeout);
+                        // attachActive creates a shell only when attach fails.
+                        await attachActive(gen);
+                    } catch (err) {
+                        if (gen === switchGen) {
+                            showSetup((err as Error).message);
+                        }
+                    }
+                })();
+            },
+        });
 
         fitAddon.fit();
         const dims = { cols: terminal.cols, rows: terminal.rows };
@@ -555,58 +555,64 @@ async function runSingleTerminal(
     }
 
     let ws: WebSocket | null = new WebSocket(tty.url);
-    let attachAddon: AttachAddon | null = new AttachAddon(ws);
-    terminal.loadAddon(attachAddon);
+    let ptyAttach: PtyAttachHandle | null = null;
     let ephemeralUnloading = false;
 
     const bindSocket = (socket: WebSocket, id: string) => {
+        ptyAttach?.dispose();
         ws = socket;
         activeTtyId = id;
-        attachAddon = new AttachAddon(socket);
-        terminal.loadAddon(attachAddon);
-        socket.onclose = () => {
-            if (ephemeralUnloading) {
-                return;
-            }
-            void (async () => {
-                try {
-                    const again = await attachTTY(id);
-                    if (again && !ephemeralUnloading) {
-                        bindSocket(new WebSocket(again.url), again.id);
-                        fitAddon.fit();
-                        terminal.focus();
-                        return;
-                    }
-                } catch {
-                    // fall through
-                }
+        ptyAttach = attachPtySocket(terminal, socket, {
+            isCurrent: () => !ephemeralUnloading && ws === socket,
+            onClose: () => {
                 if (ephemeralUnloading) {
                     return;
                 }
-                try {
-                    const created = await createTTY({ mode: "shell" });
-                    bindSocket(new WebSocket(created.url), created.id);
-                    fitAddon.fit();
-                    await browser.runtime.sendMessage<RequestResizeTTY>({
-                        jsonrpc: "2.0",
-                        method: "tty.resize",
-                        params: { tty: created.id, cols: terminal.cols, rows: terminal.rows },
-                    });
-                    terminal.focus();
-                } catch (err) {
-                    console.error("shell recover failed:", err);
-                }
-            })();
-        };
+                void (async () => {
+                    try {
+                        const again = await attachTTY(id);
+                        if (again && !ephemeralUnloading) {
+                            bindSocket(new WebSocket(again.url), again.id);
+                            fitAddon.fit();
+                            terminal.focus();
+                            return;
+                        }
+                    } catch {
+                        // fall through
+                    }
+                    if (ephemeralUnloading) {
+                        return;
+                    }
+                    try {
+                        const created = await createTTY({ mode: "shell" });
+                        bindSocket(new WebSocket(created.url), created.id);
+                        fitAddon.fit();
+                        await browser.runtime.sendMessage<RequestResizeTTY>({
+                            jsonrpc: "2.0",
+                            method: "tty.resize",
+                            params: { tty: created.id, cols: terminal.cols, rows: terminal.rows },
+                        });
+                        terminal.focus();
+                    } catch (err) {
+                        console.error("shell recover failed:", err);
+                    }
+                })();
+            },
+        });
     };
 
     bindSocket(ws, tty.id);
 
     globalThis.onbeforeunload = () => {
         ephemeralUnloading = true;
+        ptyAttach?.dispose();
+        ptyAttach = null;
         if (ws) {
-            ws.onclose = () => { };
-            ws.close();
+            try {
+                ws.close();
+            } catch {
+                // ignore
+            }
         }
     };
     globalThis.onresize = () => {
