@@ -512,19 +512,6 @@ func prependPath(pathEnv, dir string) string {
 	return strings.Join(out, string(os.PathListSeparator))
 }
 
-func writeAgentApp(name string) error {
-	path, err := exec.LookPath(name)
-	if err != nil {
-		return nil
-	}
-	script := fmt.Sprintf("#!/bin/sh\nexec %s \"$@\"\n", shellQuote(path))
-	target := filepath.Join(appDir, name)
-	if err := os.WriteFile(target, []byte(script), 0755); err != nil {
-		return err
-	}
-	return nil
-}
-
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"

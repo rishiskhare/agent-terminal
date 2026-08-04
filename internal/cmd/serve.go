@@ -38,12 +38,14 @@ type Session struct {
 	Pty pty.Pty
 	Buf *scrollback.Ring
 
-	mu      sync.Mutex
-	writeMu sync.Mutex // serializes websocket writes (replay, live, ping)
-	client  *websocket.Conn
-	cols    int
-	rows    int
-	closed  bool
+	mu           sync.Mutex
+	writeMu      sync.Mutex // serializes websocket writes (replay, live, ping)
+	teardownOnce sync.Once
+	client       *websocket.Conn
+	cols         int
+	rows         int
+	closed       bool
+	manager      *SessionManager
 }
 
 type SessionManager struct {
@@ -106,9 +108,10 @@ func (m *SessionManager) Create(cmdFactory func(tty pty.Pty, id string) (*pty.Cm
 	}
 
 	session := &Session{
-		ID:  id,
-		Pty: tty,
-		Buf: scrollback.New(scrollbackBytes),
+		ID:      id,
+		Pty:     tty,
+		Buf:     scrollback.New(scrollbackBytes),
+		manager: m,
 	}
 
 	m.mu.Lock()
@@ -118,7 +121,7 @@ func (m *SessionManager) Create(cmdFactory func(tty pty.Pty, id string) (*pty.Cm
 	go session.readLoop(m.logger)
 	go func() {
 		_ = cmd.Wait()
-		session.markClosed()
+		m.reap(id)
 	}()
 
 	return session, nil
@@ -134,18 +137,31 @@ func (m *SessionManager) Destroy(id string) error {
 	if !ok {
 		return fmt.Errorf("invalid tty ID: %s", id)
 	}
-	session.close()
-	// Best-effort: drop this PTY's agent-browser session only (never close --all).
-	if err := closeNamedAgentBrowserSession(browserSessionName(id)); err != nil {
-		m.logger.Debug("agent-browser session close", "session", browserSessionName(id), "error", err)
-	}
+	session.finalize()
 	return nil
 }
 
-func (s *Session) markClosed() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.closed = true
+// reap removes a dead session after the PTY child exits (or PTY EOF).
+func (m *SessionManager) reap(id string) {
+	m.mu.Lock()
+	session, ok := m.sessions[id]
+	if ok {
+		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	session.finalize()
+}
+
+func (s *Session) finalize() {
+	s.teardownOnce.Do(func() {
+		s.close()
+		if err := closeNamedAgentBrowserSession(browserSessionName(s.ID)); err != nil && s.manager != nil {
+			s.manager.logger.Debug("agent-browser session close", "session", browserSessionName(s.ID), "error", err)
+		}
+	})
 }
 
 func (s *Session) close() {
@@ -157,6 +173,12 @@ func (s *Session) close() {
 		s.client = nil
 	}
 	_ = s.Pty.Close()
+}
+
+func (s *Session) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *Session) readLoop(logger *slog.Logger) {
@@ -183,7 +205,11 @@ func (s *Session) readLoop(logger *slog.Logger) {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
 				logger.Debug("pty read ended", "error", err, "session", s.ID)
 			}
-			s.markClosed()
+			if s.manager != nil {
+				s.manager.reap(s.ID)
+			} else {
+				s.finalize()
+			}
 			return
 		}
 	}
@@ -664,6 +690,10 @@ func buildPtyCommand(tty pty.Pty, id, mode, app string, args []string, cwd strin
 			}
 		}
 
+		if err := ensureAgentAppScript(entrypoint, app); err != nil {
+			return nil, fmt.Errorf("failed to refresh app launcher: %w", err)
+		}
+
 		cmd = tty.Command(entrypoint, args...)
 	} else {
 		cmd = tty.Command(k.String("command"), k.Strings("args")...)
@@ -753,6 +783,10 @@ func NewWebSocketHandler(sessions *SessionManager) http.Handler {
 			http.Error(w, fmt.Sprintf("invalid terminal ID: %s", ttyID), http.StatusBadRequest)
 			return
 		}
+		if session.isClosed() {
+			http.Error(w, fmt.Sprintf("tty session is closed: %s", ttyID), http.StatusGone)
+			return
+		}
 
 		HandleWebsocket(session)(w, r)
 	})
@@ -819,9 +853,14 @@ func HandleWebsocket(session *Session) http.HandlerFunc {
 				close(done)
 				return
 			}
+			if session.isClosed() {
+				close(done)
+				return
+			}
 			if _, err := session.Pty.Write(bytes.Trim(data, "\x00")); err != nil {
 				log.Printf("failed to write to tty: %s", err)
-				continue
+				close(done)
+				return
 			}
 		}
 	}
