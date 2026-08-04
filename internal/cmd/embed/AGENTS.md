@@ -2,31 +2,27 @@
 # Agent Terminal
 
 You are in the **Agent Terminal** side-panel PTY (a shell), not a browser page.
-`agent-browser` attaches to the user's **live Google Chrome** (primary profile;
-visible tabs). Never scratchpad Chrome or Chrome-for-Testing.
+Live Google Chrome is the attach target (primary profile; visible tabs).
+Never scratchpad Chrome or Chrome-for-Testing.
 `open` / `goto` / `navigate` open a **tab** in the existing window.
 
-## Use `agent-browser` (shell)
+## Use the Agent Terminal browser shim (shell)
 
-For open-web asks like **“search for …”**, **“google …”**, **“look up …”**,
-**“find the docs for …”**, or live facts (weather, prices, “latest …”), run
-`agent-browser` in the shell. **Do not** use Claude **Web Search**, **WebFetch**,
-web-search MCPs, or other browser MCPs for those asks.
-
-Also use `agent-browser` for browse, navigate, forms, screenshots, and page extract.
-Known URL → open that URL; otherwise open a search URL, then `snapshot -i`:
+Call the **shim** (not a bare `agent-browser` from Hermès/npm that may skip the gate):
 
 ```bash
-agent-browser open "<url-or-search-url>"
-agent-browser snapshot -i
+"${AGENT_TERMINAL_BROWSER:-$HOME/.local/share/agent-terminal/bin/agent-browser}" open "<url-or-search-url>"
+"${AGENT_TERMINAL_BROWSER:-$HOME/.local/share/agent-terminal/bin/agent-browser}" snapshot -i
 ```
 
-Act on `@refs`; re-snapshot after navigation or DOM changes.
-Workflow: `agent-browser skills get core --full`
+Use that for open-web asks (“search for …”, “google …”, “look up …”, “find the docs for …”,
+live facts) and for browse, forms, screenshots, and page extract.
+**Do not** use Claude **Web Search**, **WebFetch**, web-search MCPs, or other browser MCPs
+for those asks unless the user **names** that tool.
 
-**Do not** use Web Search, WebFetch, web-search MCPs, `chrome-devtools-mcp`,
-Playwright MCP, `browser-use` / `bu`, Claude-in-Chrome, or Chrome-for-Testing
-for those tasks unless the user **names** that tool.
+Known URL → open that URL; otherwise open a search URL, then `snapshot -i`.
+Act on `@refs`; re-snapshot after navigation or DOM changes.
+Workflow: `agent-browser skills get core --full` (skills may passthrough).
 
 ## Do not open Chrome
 
@@ -39,10 +35,15 @@ for those tasks unless the user **names** that tool.
 
 ## Attach failure
 
-If you see **Agent Terminal: cannot attach to your live Chrome**, **stop**.
-Tell the user: keep Chrome open, enable `chrome://inspect/#remote-debugging`,
-click **Allow** once, run `agent-terminal doctor --fix`.
-No `--profile` workarounds and **no** falling back to Web Search or other tools.
+If you see **Agent Terminal: cannot attach to your live Chrome**, or
+**Auto-launch failed: No running Chrome instance found**, **stop**.
+Do not retry in a loop and do not fall back to Web Search.
 
-After a **Chrome restart**, one Allow click is expected. Do not reconnect in a loop.
+Tell the user (Chrome may already be open):
+
+1. Click **Allow** if an “Allow remote debugging?” dialog is showing
+2. Keep Google Chrome open with remote debugging on (`chrome://inspect/#remote-debugging`)
+3. Run `agent-terminal doctor --fix` if it still fails
+
+After a **Chrome restart**, one Allow click is expected.
 <!-- agent-terminal:end -->

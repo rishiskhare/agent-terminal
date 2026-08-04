@@ -63,9 +63,10 @@ func TestManagedAgentsMDRouting(t *testing.T) {
 		"side-panel PTY",
 		"Web Search",
 		"search for …",
+		"AGENT_TERMINAL_BROWSER",
 		"cannot attach to your live Chrome",
+		"Auto-launch failed",
 		"Do not open Chrome",
-		"falling back",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("managed AGENTS.md missing routing phrase %q", want)

@@ -30,3 +30,10 @@ func TestMergePtyEnvReplacesPATH(t *testing.T) {
 		t.Fatalf("PATH not replaced: %q", path)
 	}
 }
+
+func TestPrependPathKeepsShimFirst(t *testing.T) {
+	got := prependPath("/usr/bin:/shim:/bin", "/shim")
+	if got != "/shim:/usr/bin:/bin" {
+		t.Fatalf("prependPath: %q", got)
+	}
+}

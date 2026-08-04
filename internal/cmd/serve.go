@@ -639,10 +639,18 @@ func buildPtyCommand(tty pty.Pty, mode, app string, args []string, cwd string) (
 		cmd = tty.Command(k.String("command"), k.Strings("args")...)
 	}
 
+	ptyEnv := k.StringMap("env")
+	// Always keep the agent-browser shim first. Interactive shells often rewrite
+	// PATH from rc files and would otherwise hit a non-gated agent-browser
+	// (Auto-launch / Chrome-for-Testing) instead of browser-gate.
+	pathForPty := prependPath(firstNonEmpty(ptyEnv["PATH"], os.Getenv("PATH")), shimDir)
+	ptyEnv = copyStringMap(ptyEnv)
+	ptyEnv["PATH"] = pathForPty
 	cmd.Env = mergePtyEnv(os.Environ(), map[string]string{
-		"TERM":         "xterm-256color",
-		"TERM_PROGRAM": "agent-terminal",
-	}, k.StringMap("env"))
+		"TERM":                   "xterm-256color",
+		"TERM_PROGRAM":           "agent-terminal",
+		"AGENT_TERMINAL_BROWSER": filepath.Join(shimDir, "agent-browser"),
+	}, ptyEnv)
 
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -655,6 +663,23 @@ func buildPtyCommand(tty pty.Pty, mode, app string, args []string, cwd string) (
 	go healAgentBrowserBestEffort()
 
 	return cmd, nil
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // mergePtyEnv builds the PTY environment. Later maps win; keys replace any
