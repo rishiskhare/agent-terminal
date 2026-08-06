@@ -1,20 +1,19 @@
-https://github.com/user-attachments/assets/4a35a440-5a95-40eb-a6b8-d0e51e34b9f6
-
 <p align="center">
   <img src="media/agent-terminal-logo.png" width="128" alt="Agent Terminal logo">
 </p>
 
 <h1 align="center">Agent Terminal</h1>
-
-<p align="center">
-An integrated terminal in your browser that lets you use AI coding agents to control live tabs (works with Claude Code, Codex, Cursor, Hermes, and more).
-</p>
-
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white" alt="Go"></a>
   <a href="https://developer.chrome.com/docs/extensions/mv3/"><img src="https://img.shields.io/badge/Chrome-MV3-4285F4?logo=googlechrome&logoColor=white" alt="Chrome"></a>
 </p>
+
+<p align="center">
+An integrated terminal in your browser that lets you use AI coding agents to control live tabs (works with Claude Code, Codex, Cursor, Hermes, and more).
+</p>
+
+https://github.com/user-attachments/assets/4a35a440-5a95-40eb-a6b8-d0e51e34b9f6
 
 Connect your agents to Chrome with interactive browser automation, in Chrome’s side panel, on your live tabs.
 
