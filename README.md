@@ -1,3 +1,5 @@
+https://github.com/user-attachments/assets/4a35a440-5a95-40eb-a6b8-d0e51e34b9f6
+
 <p align="center">
   <img src="media/agent-terminal-logo.png" width="128" alt="Agent Terminal logo">
 </p>
