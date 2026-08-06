@@ -34,7 +34,7 @@ This extension lets coding agents drive the page you’re looking at: open, clic
 
 ## Quick start
 
-**Prerequisites:** Go 1.24+, Node.js 20+, Chrome.
+**Prerequisites:** [Go](https://go.dev/) 1.24+, [Node.js](https://nodejs.org/en) 20+, Chrome.
 
 ```sh
 git clone https://github.com/rishiskhare/agent-terminal.git
