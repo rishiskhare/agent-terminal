@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -24,17 +25,6 @@ var (
 	maxBufferSizeBytes   = 512
 	keepalivePingTimeout = 20 * time.Second
 )
-
-var configDir = filepath.Join(os.Getenv("HOME"), ".config", "agent-terminal")
-var cacheDir = filepath.Join(os.Getenv("HOME"), ".cache", "agent-terminal")
-var dataDir = filepath.Join(os.Getenv("HOME"), ".local", "share", "agent-terminal")
-var commandDir = filepath.Join(configDir, "commands")
-var appDir = filepath.Join(configDir, "apps")
-var shimDir = filepath.Join(dataDir, "bin")
-
-var legacyConfigDir = filepath.Join(os.Getenv("HOME"), ".config", "tweety")
-var legacyCacheDir = filepath.Join(os.Getenv("HOME"), ".cache", "tweety")
-var legacyDataDir = filepath.Join(os.Getenv("HOME"), ".local", "share", "tweety")
 
 const nativeHostID = "com.agentterminal.native"
 const nativeHostManifest = "com.agentterminal.native.json"
@@ -121,7 +111,14 @@ func loadConfig() error {
 }
 
 // migrateLegacyDirs renames old tweety XDG dirs to agent-terminal once.
+// On Windows, also migrate prior Git-Bash/XDG-style agent-terminal dirs into AppData.
 func migrateLegacyDirs() {
+	if runtime.GOOS == "windows" {
+		home := userHomeDir()
+		migrateDir(filepath.Join(home, ".config", "agent-terminal"), configDir)
+		migrateDir(filepath.Join(home, ".cache", "agent-terminal"), cacheDir)
+		migrateDir(filepath.Join(home, ".local", "share", "agent-terminal"), dataDir)
+	}
 	migrateDir(legacyConfigDir, configDir)
 	migrateDir(legacyCacheDir, cacheDir)
 	migrateDir(legacyDataDir, dataDir)
@@ -198,16 +195,36 @@ func readConfigMap() (map[string]interface{}, error) {
 }
 
 func getDefaultShell() string {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		switch runtime.GOOS {
-		case "darwin":
-			return "/bin/zsh"
-		case "linux":
-			return "/bin/bash"
-		default:
-			return "/bin/sh"
-		}
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return shell
 	}
-	return shell
+	switch runtime.GOOS {
+	case "darwin":
+		return "/bin/zsh"
+	case "linux":
+		return "/bin/bash"
+	case "windows":
+		// Prefer Git Bash when present so agent app launchers (#!/bin/sh) work.
+		for _, candidate := range []string{
+			filepath.Join(os.Getenv("PROGRAMFILES"), "Git", "bin", "bash.exe"),
+			filepath.Join(os.Getenv("ProgramFiles(x86)"), "Git", "bin", "bash.exe"),
+			`C:\Program Files\Git\bin\bash.exe`,
+		} {
+			if candidate == "" {
+				continue
+			}
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+		if ps, err := exec.LookPath("powershell.exe"); err == nil {
+			return ps
+		}
+		if comspec := os.Getenv("COMSPEC"); comspec != "" {
+			return comspec
+		}
+		return `C:\Windows\System32\cmd.exe`
+	default:
+		return "/bin/sh"
+	}
 }

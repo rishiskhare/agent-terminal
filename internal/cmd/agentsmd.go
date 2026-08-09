@@ -19,11 +19,11 @@ func canonicalAgentsMDPath() string {
 }
 
 func homeAgentsMDPath() string {
-	return filepath.Join(os.Getenv("HOME"), "AGENTS.md")
+	return filepath.Join(userHomeDir(), "AGENTS.md")
 }
 
 func homeClaudeMDPath() string {
-	return filepath.Join(os.Getenv("HOME"), "CLAUDE.md")
+	return filepath.Join(userHomeDir(), "CLAUDE.md")
 }
 
 // managedAgentsMDBody loads the shipped Markdown from embed/AGENTS.md.
@@ -106,7 +106,9 @@ func upsertHomeAgentsMD(path, managedBody string) (DoctorCheck, error) {
 
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
-		if err := os.WriteFile(path, []byte(managedBody), 0644); err != nil {
+		// Normalize trailing newlines so a later replaceManagedBlock is idempotent.
+		normalized := strings.TrimRight(managedBody, "\r\n") + "\n"
+		if err := os.WriteFile(path, []byte(normalized), 0644); err != nil {
 			return c, err
 		}
 		c.Status = "ok"
@@ -257,7 +259,12 @@ func replaceManagedBlock(content, newBlock string) (string, bool) {
 	if end < len(content) && content[end] == '\n' {
 		end++
 	}
-	replacement := strings.TrimRight(newBlock, "\n") + "\n"
+	replacement := strings.TrimRight(newBlock, "\r\n") + "\n"
+	// Treat CRLF/LF equivalently so Windows round-trips stay idempotent.
+	if strings.ReplaceAll(content[:start]+replacement+content[end:], "\r\n", "\n") ==
+		strings.ReplaceAll(content, "\r\n", "\n") {
+		return content, true
+	}
 	return content[:start] + replacement + content[end:], true
 }
 

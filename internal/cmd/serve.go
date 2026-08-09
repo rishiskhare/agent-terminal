@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -467,7 +468,8 @@ func NewMessagingHost(logger *slog.Logger, sessions *SessionManager) *jsonrpc.Ho
 			theme = k.String("theme")
 		}
 
-		themeBytes, err := themeFs.ReadFile(filepath.Join("themes", theme+".json"))
+		// embed.FS paths always use forward slashes; filepath.Join breaks on Windows.
+		themeBytes, err := themeFs.ReadFile(path.Join("themes", theme+".json"))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read theme file: %w", err)
 		}
@@ -710,7 +712,7 @@ func buildPtyCommand(tty pty.Pty, id, mode, app string, args []string, cwd strin
 	cmd.Env = mergePtyEnv(os.Environ(), map[string]string{
 		"TERM":                   "xterm-256color",
 		"TERM_PROGRAM":           "agent-terminal",
-		"AGENT_TERMINAL_BROWSER": filepath.Join(shimDir, "agent-browser"),
+		"AGENT_TERMINAL_BROWSER": agentBrowserShimPath(),
 	}, ptyEnv, map[string]string{
 		"AGENT_BROWSER_SESSION": browserSessionName(id),
 	})
@@ -718,7 +720,7 @@ func buildPtyCommand(tty pty.Pty, id, mode, app string, args []string, cwd strin
 	if cwd != "" {
 		cmd.Dir = cwd
 	} else {
-		cmd.Dir = os.Getenv("HOME")
+		cmd.Dir = userHomeDir()
 	}
 
 	// Do not heal/close --all here: that nukes sibling PTY browser sessions.

@@ -260,17 +260,36 @@ func checkNativeMessaging() (bool, string) {
 	if err != nil {
 		return false, err.Error()
 	}
-	found := 0
+	foundFiles := 0
+	seen := map[string]bool{}
+	registryHits := 0
+	registryNeeded := false
 	for _, b := range browsers {
 		path := filepath.Join(b.ManifestDir, nativeHostManifest)
-		if _, err := os.Stat(path); err == nil {
-			found++
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		if !seen[path] {
+			seen[path] = true
+			foundFiles++
+		}
+		if b.RegistryKey != "" {
+			registryNeeded = true
+			if nativeHostRegistered(b.RegistryKey, path) {
+				registryHits++
+			}
 		}
 	}
-	if found == 0 {
+	if foundFiles == 0 {
 		return false, "No native messaging manifests found"
 	}
-	return true, fmt.Sprintf("%d browser manifest(s) present", found)
+	if registryNeeded && registryHits == 0 {
+		return false, "Manifest present but no Windows registry keys registered — re-run: agent-terminal install"
+	}
+	if registryNeeded {
+		return true, fmt.Sprintf("%d manifest(s), %d Windows registry key(s)", foundFiles, registryHits)
+	}
+	return true, fmt.Sprintf("%d browser manifest(s) present", foundFiles)
 }
 
 func ensureInstall() error {
@@ -278,12 +297,15 @@ func ensureInstall() error {
 }
 
 func chromeUserDataDir() string {
-	home := os.Getenv("HOME")
+	home := userHomeDir()
 	switch runtime.GOOS {
 	case "darwin":
 		return filepath.Join(home, "Library", "Application Support", "Google", "Chrome")
 	case "linux":
 		return filepath.Join(home, ".config", "google-chrome")
+	case "windows":
+		local := envOr("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+		return filepath.Join(local, "Google", "Chrome", "User Data")
 	default:
 		return ""
 	}
@@ -444,13 +466,25 @@ func writeAgentBrowserShim(realBinary string) error {
 		return err
 	}
 
+	if runtime.GOOS == "windows" {
+		script := fmt.Sprintf("@echo off\r\n"+
+			"REM Agent Terminal shim: live Chrome only via browser-gate (never spawn cold Chrome).\r\n"+
+			"set AGENT_BROWSER_AUTO_CONNECT=1\r\n"+
+			"%s browser-gate --real %s -- %%*\r\n",
+			windowsCmdQuote(self), windowsCmdQuote(realBinary))
+		return os.WriteFile(agentBrowserShimPath(), []byte(script), 0755)
+	}
+
 	script := fmt.Sprintf(`#!/bin/sh
 # Agent Terminal shim: live Chrome only via browser-gate (never spawn cold Chrome).
 export AGENT_BROWSER_AUTO_CONNECT=1
 exec %s browser-gate --real %s -- "$@"
 `, shellQuote(self), shellQuote(realBinary))
-	target := filepath.Join(shimDir, "agent-browser")
-	return os.WriteFile(target, []byte(script), 0755)
+	return os.WriteFile(agentBrowserShimPath(), []byte(script), 0755)
+}
+
+func windowsCmdQuote(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
 func realAgentBrowserSidecarPath() string {
