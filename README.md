@@ -35,6 +35,8 @@ This extension lets coding agents drive the page you’re looking at: open, clic
 
 **Prerequisites:** [Go](https://go.dev/) 1.24+, [Node.js](https://nodejs.org/en) 20+, Chrome.
 
+### macOS / Linux
+
 ```sh
 git clone https://github.com/rishiskhare/agent-terminal.git
 cd agent-terminal
@@ -42,6 +44,20 @@ go build -o agent-terminal .
 ./agent-terminal install
 cd extension && npm install && npm run build
 ```
+
+### Windows (PowerShell or Git Bash)
+
+```sh
+git clone https://github.com/rishiskhare/agent-terminal.git
+cd agent-terminal
+go build -o agent-terminal.exe .
+./agent-terminal.exe install
+cd extension && npm install && npm run build
+```
+
+On Windows, `install` writes a `.cmd` native-messaging host wrapper, copies the binary to `%LOCALAPPDATA%\agent-terminal\`, and registers HKCU registry keys so Chrome/Edge can discover the host. If the side panel still says **Native host not connected**, fully quit Chrome and reopen it, then click **Retry**.
+
+See [CHANGELOG-WINDOWS.md](CHANGELOG-WINDOWS.md) for Windows-specific fixes.
 
 Then load the extension in Chrome:
 

@@ -9,6 +9,11 @@
 /completions/
 /bin/
 /agent-terminal
+/agent-terminal.exe
+
+# accidental local XDG dirs when run from the repo on Windows
+/.config/
+/.local/
 
 # extension
 extension/node_modules/

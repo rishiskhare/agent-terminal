@@ -3,9 +3,17 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func skipIfWindowsNoCodexShim(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("codex network shim is Unix-only")
+	}
+}
 
 func withTempAgentDirs(t *testing.T) {
 	t.Helper()
@@ -40,6 +48,7 @@ func TestRenderCodexShim(t *testing.T) {
 }
 
 func TestApplyCodexSandboxDefaultsInstallOptOutNoMutate(t *testing.T) {
+	skipIfWindowsNoCodexShim(t)
 	withTempAgentDirs(t)
 	codexHome := t.TempDir()
 	cfg := filepath.Join(codexHome, "config.toml")
@@ -97,6 +106,7 @@ func TestApplyCodexSandboxDefaultsInstallOptOutNoMutate(t *testing.T) {
 }
 
 func TestResolveRealCodexRejectsShimDir(t *testing.T) {
+	skipIfWindowsNoCodexShim(t)
 	withTempAgentDirs(t)
 	real := filepath.Join(t.TempDir(), "codex-real")
 	if err := os.WriteFile(real, []byte("#!/bin/sh\n"), 0755); err != nil {
@@ -119,6 +129,7 @@ func TestResolveRealCodexRejectsShimDir(t *testing.T) {
 }
 
 func TestEnsureAgentAppScriptPointsCodexAtShim(t *testing.T) {
+	skipIfWindowsNoCodexShim(t)
 	withTempAgentDirs(t)
 	real := filepath.Join(t.TempDir(), "codex")
 	if err := os.WriteFile(real, []byte("#!/bin/sh\n"), 0755); err != nil {

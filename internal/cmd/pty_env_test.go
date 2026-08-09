@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -32,8 +33,11 @@ func TestMergePtyEnvReplacesPATH(t *testing.T) {
 }
 
 func TestPrependPathKeepsShimFirst(t *testing.T) {
-	got := prependPath("/usr/bin:/shim:/bin", "/shim")
-	if got != "/shim:/usr/bin:/bin" {
+	sep := string(os.PathListSeparator)
+	in := strings.Join([]string{"/usr/bin", "/shim", "/bin"}, sep)
+	want := strings.Join([]string{"/shim", "/usr/bin", "/bin"}, sep)
+	got := prependPath(in, "/shim")
+	if got != want {
 		t.Fatalf("prependPath: %q", got)
 	}
 }

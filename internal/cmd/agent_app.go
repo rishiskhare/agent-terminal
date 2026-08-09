@@ -62,9 +62,31 @@ func writeAgentAppTo(name, execPath string) error {
 		return err
 	}
 	shell, args := configuredShell()
+	if runtime.GOOS == "windows" {
+		script := renderAgentAppCmd(execPath, shell, args)
+		target := filepath.Join(appDir, name+".cmd")
+		return os.WriteFile(target, []byte(script), 0755)
+	}
 	script := renderAgentAppScript(execPath, shell, args)
 	target := filepath.Join(appDir, name)
 	return os.WriteFile(target, []byte(script), 0755)
+}
+
+// renderAgentAppCmd builds a Windows .cmd launcher that runs the agent, then the shell.
+func renderAgentAppCmd(agentPath, shell string, shellArgs []string) string {
+	var b strings.Builder
+	b.WriteString("@echo off\r\n")
+	b.WriteString("REM " + agentAppMarker + "\r\n")
+	b.WriteString(windowsCmdQuote(agentPath))
+	b.WriteString(" %*\r\n")
+	b.WriteString("if errorlevel 1 exit /b %ERRORLEVEL%\r\n")
+	b.WriteString(windowsCmdQuote(shell))
+	for _, a := range shellArgs {
+		b.WriteByte(' ')
+		b.WriteString(windowsCmdQuote(a))
+	}
+	b.WriteString("\r\n")
+	return b.String()
 }
 
 // ensureAgentAppScript rewrites stale or mis-pointed launchers before PTY start.
